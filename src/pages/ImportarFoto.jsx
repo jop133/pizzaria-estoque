@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { analisarImagemEstoque, fileToBase64 } from '../services/geminiVision'
 import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../services/estoque'
+import { db } from '../db'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
@@ -106,21 +107,37 @@ export function ImportarFoto() {
 
     setConfirmando(true)
     let ok = 0
+    let criados = 0
     let erros = 0
 
     for (const foto of prontas) {
       for (const item of foto.itens.filter(i => i.ativo)) {
         try {
+          let produtoId = item.produtoId
+          let fichaId = item.fichaId
+
+          // cadastrar automaticamente se sem vínculo e for entrada ou saída manual
+          if (!produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha') {
+            produtoId = await db.produtos.add({
+              nome: item.nome,
+              categoria: 'Outros',
+              unidade: item.unidade || 'un',
+              quantidade: 0,
+              estoqueMinimo: 0,
+            })
+            criados++
+          }
+
           if (foto.resultado.tipo === 'entrada') {
-            if (!item.produtoId) { erros++; continue }
-            await registrarEntrada(item.produtoId, item.quantidade, 'Importado por foto')
+            if (!produtoId) { erros++; continue }
+            await registrarEntrada(produtoId, item.quantidade, 'Importado por foto')
           } else if (foto.resultado.tipo === 'saida_ficha') {
-            if (item.fichaId) await registrarSaidaFicha(item.fichaId, item.quantidade, 'Importado por foto')
-            else if (item.produtoId) await registrarSaidaManual(item.produtoId, item.quantidade, 'Importado por foto')
+            if (fichaId) await registrarSaidaFicha(fichaId, item.quantidade, 'Importado por foto')
+            else if (produtoId) await registrarSaidaManual(produtoId, item.quantidade, 'Importado por foto')
             else { erros++; continue }
           } else {
-            if (!item.produtoId) { erros++; continue }
-            await registrarSaidaManual(item.produtoId, item.quantidade, 'Importado por foto')
+            if (!produtoId) { erros++; continue }
+            await registrarSaidaManual(produtoId, item.quantidade, 'Importado por foto')
           }
           ok++
         } catch { erros++ }
@@ -129,10 +146,11 @@ export function ImportarFoto() {
 
     setConfirmando(false)
     if (ok > 0) {
-      toast.success(`${ok} item(ns) lançado(s) no estoque!`)
+      const msg = criados > 0 ? `${ok} item(ns) lançado(s)! ${criados} produto(s) criado(s) automaticamente.` : `${ok} item(ns) lançado(s) no estoque!`
+      toast.success(msg)
       setFila(prev => prev.filter(f => f.status !== 'pronto'))
     }
-    if (erros > 0) toast.error(`${erros} item(ns) sem correspondência — verifique manualmente`)
+    if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados`)
   }
 
   const totalProntas = fila.filter(f => f.status === 'pronto').length
