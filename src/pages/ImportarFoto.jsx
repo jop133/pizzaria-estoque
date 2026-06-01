@@ -2,7 +2,8 @@ import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { analisarImagemEstoque, fileToBase64 } from '../services/geminiVision'
 import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../services/estoque'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
@@ -17,7 +18,6 @@ export function ImportarFoto() {
   const [editandoChave, setEditandoChave] = useState(!localStorage.getItem('gemini_api_key'))
   const [chaveTemp, setChaveTemp] = useState('')
 
-  // fila de fotos: [{ id, url, file, status: 'aguardando'|'analisando'|'pronto'|'erro', resultado, itens }]
   const [fila, setFila] = useState([])
   const [confirmando, setConfirmando] = useState(false)
 
@@ -116,15 +116,16 @@ export function ImportarFoto() {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
 
-          // cadastrar automaticamente se sem vínculo e for entrada ou saída manual
           if (!produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha') {
-            produtoId = await db.produtos.add({
+            const { data: novo } = await supabase.from('produtos').insert({
+              organizacao_id: session.organizacaoId,
               nome: item.nome,
               categoria: 'Outros',
               unidade: item.unidade || 'un',
               quantidade: 0,
-              estoqueMinimo: 0,
-            })
+              estoque_minimo: 0,
+            }).select().single()
+            produtoId = novo?.id
             criados++
           }
 
@@ -160,7 +161,6 @@ export function ImportarFoto() {
     <div className="space-y-4 max-w-lg mx-auto">
       <h1 className="text-2xl font-bold text-gray-800">Importar por Foto</h1>
 
-      {/* Chave API */}
       {editandoChave ? (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
           <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Groq (gratuita)</p>
@@ -175,7 +175,6 @@ export function ImportarFoto() {
         </div>
       )}
 
-      {/* Área de seleção */}
       <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
         <p className="text-4xl">📷</p>
         <p className="text-sm text-gray-500">Selecione uma ou várias fotos de uma vez</p>
@@ -187,7 +186,6 @@ export function ImportarFoto() {
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
       </div>
 
-      {/* Fila de fotos */}
       {fila.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -203,7 +201,6 @@ export function ImportarFoto() {
 
           {fila.map(foto => (
             <div key={foto.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-              {/* Cabeçalho da foto */}
               <div className="flex items-center gap-3 p-3 border-b border-gray-100">
                 <img src={foto.url} alt="" className="w-14 h-14 object-cover rounded-lg shrink-0" />
                 <div className="flex-1 min-w-0">
@@ -226,12 +223,10 @@ export function ImportarFoto() {
                 <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
               </div>
 
-              {/* Erro */}
               {foto.status === 'erro' && (
                 <p className="text-xs text-red-600 p-3">{foto.erro}</p>
               )}
 
-              {/* Resultado */}
               {foto.status === 'pronto' && (
                 <div className="p-3 space-y-2">
                   <p className="text-xs text-gray-500">{foto.resultado.descricao}</p>
@@ -303,7 +298,6 @@ export function ImportarFoto() {
             </div>
           ))}
 
-          {/* Botão confirmar tudo */}
           {totalProntas > 0 && (
             <button
               onClick={confirmarTodos}

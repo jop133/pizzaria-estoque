@@ -1,5 +1,5 @@
 import { useProdutos, useLancamentos, useProdutosAbaixoMinimo } from '../hooks/useEstoque'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 import {
@@ -12,7 +12,7 @@ export function Dashboard() {
   const abaixoMinimo = useProdutosAbaixoMinimo()
 
   const totalProdutos = produtos.length
-  const totalItens = produtos.reduce((s, p) => s + p.quantidade, 0)
+  const totalItens = produtos.reduce((s, p) => s + (p.quantidade || 0), 0)
 
   const ultimos7dias = lancamentos.filter(l => {
     const d = new Date(l.data)
@@ -53,7 +53,7 @@ export function Dashboard() {
               <div key={p.id} className="bg-white border border-red-200 rounded-lg px-3 py-2">
                 <p className="font-medium text-gray-800 text-sm">{p.nome}</p>
                 <p className="text-xs text-red-600">
-                  {p.quantidade} {p.unidade} / mín. {p.estoqueMinimo} {p.unidade}
+                  {p.quantidade} {p.unidade} / mín. {p.estoque_minimo} {p.unidade}
                 </p>
               </div>
             ))}
@@ -97,7 +97,7 @@ export function Dashboard() {
                   <span>{l.quantidade}</span>
                   <span className="text-xs">{new Date(l.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                   <button
-                    onClick={async () => { await db.lancamentos.delete(l.id); toast.success('Lançamento removido') }}
+                    onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Lançamento removido') }}
                     className="text-gray-300 hover:text-red-500 transition-colors ml-1"
                     title="Excluir lançamento"
                   >✕</button>

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useLancamentos } from '../hooks/useEstoque'
 import { exportarHistoricoCSV } from '../services/importExport'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
@@ -89,7 +89,7 @@ export function Historico() {
                   <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{l.observacao || '—'}</td>
                   <td className="px-4 py-3 text-right">
                     <button
-                      onClick={async () => { await db.lancamentos.delete(l.id); toast.success('Removido') }}
+                      onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Removido') }}
                       className="text-gray-300 hover:text-red-500 transition-colors"
                       title="Excluir"
                     >✕</button>

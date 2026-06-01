@@ -1,0 +1,155 @@
+import { createContext, useContext, useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
+
+const AuthContext = createContext(null)
+
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState(null)
+  const [membro, setMembro] = useState(null)
+  const [organizacao, setOrganizacao] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  async function carregarPerfil(userId) {
+    const { data } = await supabase
+      .from('membros')
+      .select('*, organizacoes(*)')
+      .eq('user_id', userId)
+      .single()
+
+    if (data) {
+      setMembro(data)
+      setOrganizacao(data.organizacoes)
+      session.userId = userId
+      session.organizacaoId = data.organizacao_id
+      session.papel = data.papel
+    } else {
+      setMembro(null)
+      setOrganizacao(null)
+      session.userId = userId
+      session.organizacaoId = null
+      session.papel = null
+    }
+  }
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      if (s?.user) {
+        setUser(s.user)
+        carregarPerfil(s.user.id).finally(() => setLoading(false))
+      } else {
+        setLoading(false)
+      }
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      if (s?.user) {
+        setUser(s.user)
+        carregarPerfil(s.user.id)
+      } else {
+        setUser(null)
+        setMembro(null)
+        setOrganizacao(null)
+        session.userId = null
+        session.organizacaoId = null
+        session.papel = null
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function login(email, senha) {
+    const { error } = await supabase.auth.signInWithPassword({ email, password: senha })
+    if (error) throw new Error(error.message)
+  }
+
+  async function registrar(email, senha, nome, nomeOrg) {
+    const { data, error } = await supabase.auth.signUp({ email, password: senha })
+    if (error) throw new Error(error.message)
+    const userId = data.user?.id
+    if (!userId) throw new Error('Erro ao criar conta')
+
+    // Criar organização
+    const { data: org, error: orgErr } = await supabase
+      .from('organizacoes')
+      .insert({ nome: nomeOrg, dono_id: userId })
+      .select()
+      .single()
+    if (orgErr) throw new Error(orgErr.message)
+
+    // Adicionar como Dono
+    const { error: memErr } = await supabase
+      .from('membros')
+      .insert({ organizacao_id: org.id, user_id: userId, papel: 'dono', nome, email })
+    if (memErr) throw new Error(memErr.message)
+
+    await carregarPerfil(userId)
+  }
+
+  async function entrarPorConvite(email, senha, nome, token) {
+    // Validar convite
+    const { data: convite, error: convErr } = await supabase
+      .from('convites')
+      .select('*')
+      .eq('token', token)
+      .eq('usado', false)
+      .gt('expira_em', new Date().toISOString())
+      .single()
+
+    if (convErr || !convite) throw new Error('Convite inválido ou expirado')
+
+    // Criar conta (ou login se já existe)
+    let userId
+    const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
+    if (loginErr) {
+      const { data: regData, error: regErr } = await supabase.auth.signUp({ email, password: senha })
+      if (regErr) throw new Error(regErr.message)
+      userId = regData.user?.id
+    } else {
+      userId = loginData.user?.id
+    }
+    if (!userId) throw new Error('Erro na autenticação')
+
+    // Marcar convite como usado
+    await supabase.from('convites').update({ usado: true }).eq('id', convite.id)
+
+    // Adicionar como funcionário
+    const { error: memErr } = await supabase
+      .from('membros')
+      .upsert({ organizacao_id: convite.organizacao_id, user_id: userId, papel: 'funcionario', nome, email })
+    if (memErr) throw new Error(memErr.message)
+
+    await carregarPerfil(userId)
+  }
+
+  async function logout() {
+    await supabase.auth.signOut()
+  }
+
+  async function recarregarPerfil() {
+    if (user) await carregarPerfil(user.id)
+  }
+
+  const value = {
+    user,
+    membro,
+    organizacao,
+    loading,
+    organizacaoId: membro?.organizacao_id ?? null,
+    papel: membro?.papel ?? null,
+    isDono: membro?.papel === 'dono',
+    isAdmin: membro?.papel === 'admin' || membro?.papel === 'dono',
+    login,
+    registrar,
+    entrarPorConvite,
+    logout,
+    recarregarPerfil,
+  }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+}
+
+export function useAuth() {
+  return useContext(AuthContext)
+}

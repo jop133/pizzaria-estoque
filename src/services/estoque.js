@@ -1,65 +1,87 @@
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
 
 export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') {
-  const ficha = await db.fichasTecnicas.get(fichaId)
-  if (!ficha) throw new Error('Ficha não encontrada')
+  const orgId = session.organizacaoId
+  if (!orgId) throw new Error('Sem organização ativa')
 
-  const ingredientes = await db.fichaIngredientes.where('fichaId').equals(fichaId).toArray()
+  const { data: ingredientes } = await supabase
+    .from('ficha_ingredientes')
+    .select('produto_id, quantidade')
+    .eq('ficha_id', fichaId)
 
-  await db.transaction('rw', db.produtos, db.lancamentos, async () => {
-    for (const ing of ingredientes) {
-      const totalGasto = ing.quantidade * quantidade
-      const produto = await db.produtos.get(ing.produtoId)
-      if (!produto) continue
-      await db.produtos.update(ing.produtoId, {
-        quantidade: Math.max(0, produto.quantidade - totalGasto)
-      })
-    }
-    await db.lancamentos.add({
-      tipo: 'saida_ficha',
-      fichaId,
-      nomeFicha: ficha.nome,
-      quantidade,
-      data: new Date().toISOString(),
-      observacao,
-    })
+  for (const ing of ingredientes || []) {
+    const totalGasto = ing.quantidade * quantidade
+    const { data: prod } = await supabase
+      .from('produtos')
+      .select('quantidade')
+      .eq('id', ing.produto_id)
+      .single()
+    if (!prod) continue
+    await supabase
+      .from('produtos')
+      .update({ quantidade: Math.max(0, prod.quantidade - totalGasto) })
+      .eq('id', ing.produto_id)
+  }
+
+  await supabase.from('lancamentos').insert({
+    organizacao_id: orgId,
+    tipo: 'saida_ficha',
+    ficha_id: fichaId,
+    quantidade,
+    observacao,
+    user_id: session.userId,
   })
 }
 
 export async function registrarSaidaManual(produtoId, quantidade, observacao = '') {
-  const produto = await db.produtos.get(produtoId)
-  if (!produto) throw new Error('Produto não encontrado')
+  const orgId = session.organizacaoId
+  if (!orgId) throw new Error('Sem organização ativa')
 
-  await db.transaction('rw', db.produtos, db.lancamentos, async () => {
-    await db.produtos.update(produtoId, {
-      quantidade: Math.max(0, produto.quantidade - quantidade)
-    })
-    await db.lancamentos.add({
-      tipo: 'saida_manual',
-      produtoId,
-      nomeProduto: produto.nome,
-      quantidade,
-      data: new Date().toISOString(),
-      observacao,
-    })
+  const { data: prod } = await supabase
+    .from('produtos')
+    .select('quantidade')
+    .eq('id', produtoId)
+    .single()
+  if (!prod) throw new Error('Produto não encontrado')
+
+  await supabase
+    .from('produtos')
+    .update({ quantidade: Math.max(0, prod.quantidade - quantidade) })
+    .eq('id', produtoId)
+
+  await supabase.from('lancamentos').insert({
+    organizacao_id: orgId,
+    tipo: 'saida_manual',
+    produto_id: produtoId,
+    quantidade,
+    observacao,
+    user_id: session.userId,
   })
 }
 
 export async function registrarEntrada(produtoId, quantidade, observacao = '') {
-  const produto = await db.produtos.get(produtoId)
-  if (!produto) throw new Error('Produto não encontrado')
+  const orgId = session.organizacaoId
+  if (!orgId) throw new Error('Sem organização ativa')
 
-  await db.transaction('rw', db.produtos, db.lancamentos, async () => {
-    await db.produtos.update(produtoId, {
-      quantidade: produto.quantidade + quantidade
-    })
-    await db.lancamentos.add({
-      tipo: 'entrada',
-      produtoId,
-      nomeProduto: produto.nome,
-      quantidade,
-      data: new Date().toISOString(),
-      observacao,
-    })
+  const { data: prod } = await supabase
+    .from('produtos')
+    .select('quantidade')
+    .eq('id', produtoId)
+    .single()
+  if (!prod) throw new Error('Produto não encontrado')
+
+  await supabase
+    .from('produtos')
+    .update({ quantidade: prod.quantidade + quantidade })
+    .eq('id', produtoId)
+
+  await supabase.from('lancamentos').insert({
+    organizacao_id: orgId,
+    tipo: 'entrada',
+    produto_id: produtoId,
+    quantidade,
+    observacao,
+    user_id: session.userId,
   })
 }

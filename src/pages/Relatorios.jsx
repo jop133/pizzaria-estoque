@@ -56,7 +56,7 @@ export function Relatorios() {
         <Stat label="Saídas" value={saidas.length} color="red" />
         <Stat label="Entradas" value={entradas.length} color="green" />
         <Stat label="Itens em Estoque" value={produtos.length} color="blue" />
-        <Stat label="Abaixo do Mínimo" value={produtos.filter(p => p.quantidade <= (p.estoqueMinimo || 0)).length} color="orange" />
+        <Stat label="Abaixo do Mínimo" value={produtos.filter(p => p.quantidade <= (p.estoque_minimo || 0)).length} color="orange" />
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -115,10 +115,10 @@ export function Relatorios() {
                   <td className="px-3 py-2 font-medium text-gray-800">{p.nome}</td>
                   <td className="px-3 py-2 text-gray-500">{p.categoria}</td>
                   <td className="px-3 py-2 text-right font-mono">{p.quantidade} {p.unidade}</td>
-                  <td className="px-3 py-2 text-right font-mono text-gray-400">{p.estoqueMinimo} {p.unidade}</td>
+                  <td className="px-3 py-2 text-right font-mono text-gray-400">{p.estoque_minimo} {p.unidade}</td>
                   <td className="px-3 py-2 text-center">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.quantidade <= (p.estoqueMinimo || 0) ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                      {p.quantidade <= (p.estoqueMinimo || 0) ? 'BAIXO' : 'OK'}
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.quantidade <= (p.estoque_minimo || 0) ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                      {p.quantidade <= (p.estoque_minimo || 0) ? 'BAIXO' : 'OK'}
                     </span>
                   </td>
                 </tr>

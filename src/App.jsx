@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Toaster } from 'react-hot-toast'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { Login } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
 import { Estoque } from './pages/Estoque'
 import { FichasTecnicas } from './pages/FichasTecnicas'
@@ -7,6 +9,7 @@ import { Lancamentos } from './pages/Lancamentos'
 import { Historico } from './pages/Historico'
 import { Relatorios } from './pages/Relatorios'
 import { ImportarFoto } from './pages/ImportarFoto'
+import { Configuracoes } from './pages/Configuracoes'
 import { useProdutosAbaixoMinimo } from './hooks/useEstoque'
 
 const ABAS = [
@@ -17,11 +20,45 @@ const ABAS = [
   { id: 'foto', label: 'Foto IA', icon: '📷' },
   { id: 'historico', label: 'Histórico', icon: '🕐' },
   { id: 'relatorios', label: 'Relatórios', icon: '📈' },
+  { id: 'config', label: 'Config', icon: '⚙️' },
 ]
 
-export default function App() {
+function AppInner() {
+  const { user, membro, loading } = useAuth()
   const [aba, setAba] = useState('dashboard')
   const abaixoMinimo = useProdutosAbaixoMinimo()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-red-600 flex items-center justify-center">
+        <div className="text-center text-white space-y-3">
+          <div className="text-5xl">🍕</div>
+          <p className="font-semibold">Carregando...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!user) return <Login />
+
+  // Usuário logado mas sem organização (raro, edge case)
+  if (!membro) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-4 shadow-lg">
+          <p className="text-4xl">⚠️</p>
+          <h2 className="font-bold text-gray-800">Sem organização</h2>
+          <p className="text-sm text-gray-500">Você não está vinculado a nenhuma organização. Peça um convite ao Dono ou crie uma nova conta.</p>
+          <button
+            onClick={async () => { const { supabase } = await import('./lib/supabase'); await supabase.auth.signOut() }}
+            className="btn-primary w-full"
+          >
+            Sair e tentar novamente
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const renderPage = () => {
     switch (aba) {
@@ -32,6 +69,8 @@ export default function App() {
       case 'historico': return <Historico />
       case 'relatorios': return <Relatorios />
       case 'foto': return <ImportarFoto />
+      case 'config': return <Configuracoes />
+      default: return <Dashboard />
     }
   }
 
@@ -67,12 +106,20 @@ export default function App() {
             }`}
           >
             <span className="text-lg leading-none">{a.icon}</span>
-            <span className="text-[10px] font-medium">{a.label}</span>
+            <span className="text-[9px] font-medium">{a.label}</span>
           </button>
         ))}
       </nav>
 
       <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppInner />
+    </AuthProvider>
   )
 }

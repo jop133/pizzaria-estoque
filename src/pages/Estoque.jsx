@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { useProdutos } from '../hooks/useEstoque'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
 import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
@@ -8,7 +9,7 @@ import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
-const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoqueMinimo: 0 }
+const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0 }
 
 export function Estoque() {
   const produtos = useProdutos()
@@ -46,7 +47,8 @@ export function Estoque() {
   async function excluirSelecionados() {
     if (selecionados.size === 0) return
     if (!confirm(`Excluir ${selecionados.size} produto(s) selecionado(s)?`)) return
-    await db.produtos.bulkDelete([...selecionados])
+    const { error } = await supabase.from('produtos').delete().in('id', [...selecionados])
+    if (error) return toast.error('Erro ao excluir')
     setSelecionados(new Set())
     toast.success(`${selecionados.size} produto(s) excluído(s)!`)
   }
@@ -62,13 +64,15 @@ export function Estoque() {
       categoria: form.categoria,
       unidade: form.unidade,
       quantidade: parseFloat(form.quantidade) || 0,
-      estoqueMinimo: parseFloat(form.estoqueMinimo) || 0,
+      estoque_minimo: parseFloat(form.estoque_minimo) || 0,
     }
     if (modal === 'novo') {
-      await db.produtos.add(data)
+      const { error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId })
+      if (error) return toast.error(error.message)
       toast.success('Produto adicionado!')
     } else {
-      await db.produtos.update(modal.id, data)
+      const { error } = await supabase.from('produtos').update(data).eq('id', modal.id)
+      if (error) return toast.error(error.message)
       toast.success('Produto atualizado!')
     }
     fechar()
@@ -76,7 +80,7 @@ export function Estoque() {
 
   async function excluir(id) {
     if (!confirm('Excluir este produto?')) return
-    await db.produtos.delete(id)
+    await supabase.from('produtos').delete().eq('id', id)
     toast.success('Produto excluído')
     fechar()
   }
@@ -149,7 +153,7 @@ export function Estoque() {
             </thead>
             <tbody>
               {filtrados.map(p => {
-                const baixo = p.quantidade <= (p.estoqueMinimo || 0)
+                const baixo = p.quantidade <= (p.estoque_minimo || 0)
                 return (
                   <tr key={p.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(p.id) ? 'bg-red-50' : ''}`}>
                     <td className="px-4 py-3">
@@ -161,7 +165,7 @@ export function Estoque() {
                       {p.quantidade} <span className="text-gray-400 text-xs">{p.unidade}</span>
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-gray-400 hidden md:table-cell">
-                      {p.estoqueMinimo} {p.unidade}
+                      {p.estoque_minimo} {p.unidade}
                     </td>
                     <td className="px-4 py-3 text-center">
                       <Badge color={baixo ? 'red' : 'green'}>{baixo ? 'Baixo' : 'OK'}</Badge>
@@ -205,7 +209,7 @@ export function Estoque() {
               </div>
               <div>
                 <label className="label">Estoque Mínimo</label>
-                <input type="number" min="0" step="0.01" className="input" value={form.estoqueMinimo} onChange={e => setForm(f => ({ ...f, estoqueMinimo: e.target.value }))} />
+                <input type="number" min="0" step="0.01" className="input" value={form.estoque_minimo} onChange={e => setForm(f => ({ ...f, estoque_minimo: e.target.value }))} />
               </div>
             </div>
             <div className="flex gap-2 pt-2">

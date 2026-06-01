@@ -1,5 +1,6 @@
 import Papa from 'papaparse'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -9,8 +10,8 @@ export function exportarEstoqueCSV(produtos) {
     Categoria: p.categoria || '',
     Unidade: p.unidade || '',
     'Quantidade Atual': p.quantidade,
-    'Estoque Mínimo': p.estoqueMinimo || 0,
-    Status: p.quantidade <= (p.estoqueMinimo || 0) ? 'BAIXO' : 'OK',
+    'Estoque Mínimo': p.estoque_minimo || 0,
+    Status: p.quantidade <= (p.estoque_minimo || 0) ? 'BAIXO' : 'OK',
   }))
   const csv = Papa.unparse(data)
   download(csv, 'estoque.csv', 'text/csv')
@@ -31,8 +32,8 @@ export function exportarEstoquePDF(produtos) {
       p.categoria || '-',
       p.unidade || '-',
       p.quantidade,
-      p.estoqueMinimo || 0,
-      p.quantidade <= (p.estoqueMinimo || 0) ? 'BAIXO' : 'OK',
+      p.estoque_minimo || 0,
+      p.quantidade <= (p.estoque_minimo || 0) ? 'BAIXO' : 'OK',
     ]),
     styles: { fontSize: 9 },
     headStyles: { fillColor: [220, 38, 38] },
@@ -59,15 +60,20 @@ export async function importarProdutosCSV(file) {
       skipEmptyLines: true,
       complete: async (results) => {
         try {
+          const orgId = session.organizacaoId
+          if (!orgId) return reject(new Error('Sem organização ativa'))
+
           const produtos = results.data.map(row => ({
+            organizacao_id: orgId,
             nome: row['Nome'] || row['nome'] || '',
-            categoria: row['Categoria'] || row['categoria'] || '',
+            categoria: row['Categoria'] || row['categoria'] || 'Outros',
             unidade: row['Unidade'] || row['unidade'] || 'un',
             quantidade: parseFloat(row['Quantidade'] || row['quantidade'] || 0),
-            estoqueMinimo: parseFloat(row['Estoque Mínimo'] || row['estoque_minimo'] || row['estoqueMinimo'] || 0),
+            estoque_minimo: parseFloat(row['Estoque Mínimo'] || row['estoque_minimo'] || row['estoqueMinimo'] || 0),
           })).filter(p => p.nome)
 
-          await db.produtos.bulkAdd(produtos)
+          const { error } = await supabase.from('produtos').insert(produtos)
+          if (error) return reject(error)
           resolve(produtos.length)
         } catch (e) {
           reject(e)

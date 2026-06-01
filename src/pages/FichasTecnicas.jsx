@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react'
 import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoque'
-import { db } from '../db'
+import { supabase } from '../lib/supabase'
+import { session } from '../lib/session'
 import { analisarFichaTecnica, fileToBase64 } from '../services/geminiVision'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
@@ -50,23 +51,37 @@ export function FichasTecnicas() {
 
   async function salvarFichaFoto() {
     if (!resultadoFoto) return
-    const fichaId = await db.fichasTecnicas.add({
-      nome: resultadoFoto.nome,
-      categoria: resultadoFoto.categoria || 'Pizza',
-      descricao: resultadoFoto.descricao || '',
-    })
+    const orgId = session.organizacaoId
+
+    const { data: ficha, error } = await supabase
+      .from('fichas_tecnicas')
+      .insert({
+        organizacao_id: orgId,
+        nome: resultadoFoto.nome,
+        categoria: resultadoFoto.categoria || 'Pizza',
+        descricao: resultadoFoto.descricao || '',
+      })
+      .select()
+      .single()
+    if (error) return toast.error(error.message)
+
     for (const ing of resultadoFoto.ingredientes) {
       const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
       let prod = produtos.find(p => p.nome.toLowerCase() === busca)
       if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
       let produtoId = prod?.id
+
       if (!produtoId) {
-        produtoId = await db.produtos.add({
-          nome: ing.nome, categoria: 'Outros',
-          unidade: ing.unidade || 'un', quantidade: 0, estoqueMinimo: 0,
-        })
+        const { data: novo } = await supabase
+          .from('produtos')
+          .insert({ organizacao_id: orgId, nome: ing.nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
+          .select()
+          .single()
+        produtoId = novo?.id
       }
-      await db.fichaIngredientes.add({ fichaId, produtoId, quantidade: ing.quantidade })
+      if (produtoId) {
+        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: ing.quantidade })
+      }
     }
     toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
     setModalFoto(false)
@@ -84,11 +99,17 @@ export function FichasTecnicas() {
     if (!form.nome.trim()) return toast.error('Nome obrigatório')
     const data = { nome: form.nome.trim(), categoria: form.categoria, descricao: form.descricao || '' }
     if (modal === 'novo') {
-      const id = await db.fichasTecnicas.add(data)
+      const { data: ficha, error } = await supabase
+        .from('fichas_tecnicas')
+        .insert({ ...data, organizacao_id: session.organizacaoId })
+        .select()
+        .single()
+      if (error) return toast.error(error.message)
       toast.success('Ficha criada!')
-      setDetalhe({ ...data, id })
+      setDetalhe({ ...data, id: ficha.id })
     } else {
-      await db.fichasTecnicas.update(modal.id, data)
+      const { error } = await supabase.from('fichas_tecnicas').update(data).eq('id', modal.id)
+      if (error) return toast.error(error.message)
       toast.success('Ficha atualizada!')
     }
     fechar()
@@ -96,8 +117,8 @@ export function FichasTecnicas() {
 
   async function excluir(id) {
     if (!confirm('Excluir esta ficha?')) return
-    await db.fichaIngredientes.where('fichaId').equals(id).delete()
-    await db.fichasTecnicas.delete(id)
+    await supabase.from('ficha_ingredientes').delete().eq('ficha_id', id)
+    await supabase.from('fichas_tecnicas').delete().eq('id', id)
     toast.success('Ficha excluída')
     fechar()
     if (detalhe?.id === id) setDetalhe(null)
@@ -233,19 +254,20 @@ function DetalheIngredientes({ ficha }) {
 
   async function adicionar() {
     if (!form.produtoId || !form.quantidade) return toast.error('Preencha produto e quantidade')
-    const existe = ingredientes.find(i => i.produtoId === parseInt(form.produtoId))
+    const existe = ingredientes.find(i => i.produto_id === parseInt(form.produtoId))
     if (existe) return toast.error('Ingrediente já adicionado')
-    await db.fichaIngredientes.add({
-      fichaId: ficha.id,
-      produtoId: parseInt(form.produtoId),
+    const { error } = await supabase.from('ficha_ingredientes').insert({
+      ficha_id: ficha.id,
+      produto_id: parseInt(form.produtoId),
       quantidade: parseFloat(form.quantidade),
     })
+    if (error) return toast.error(error.message)
     setForm({ produtoId: '', quantidade: '' })
     toast.success('Ingrediente adicionado!')
   }
 
   async function remover(id) {
-    await db.fichaIngredientes.delete(id)
+    await supabase.from('ficha_ingredientes').delete().eq('id', id)
   }
 
   return (
@@ -286,7 +308,7 @@ function DetalheIngredientes({ ficha }) {
           </thead>
           <tbody>
             {ingredientes.map(ing => {
-              const prod = produtos.find(p => p.id === ing.produtoId)
+              const prod = produtos.find(p => p.id === ing.produto_id)
               return (
                 <tr key={ing.id} className="border-t border-gray-100">
                   <td className="px-3 py-2 text-gray-700">{prod?.nome ?? 'Produto removido'}</td>
