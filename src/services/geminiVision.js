@@ -1,47 +1,33 @@
-const OPENROUTER_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
   const listaFichas = fichas.map(f => `- ${f.nome}`).join('\n')
 
-  const prompt = `Você é um assistente de controle de estoque de uma pizzaria.
+  const prompt = `Analise a imagem e retorne um JSON com os itens identificados.
 
-Analise esta imagem e identifique se ela contém:
-1. Uma NOTA FISCAL ou RECIBO de compra/entrega de ingredientes/produtos
-2. Um PEDIDO ou COMANDA com pizzas/pratos vendidos
-3. Uma LISTA DE ESTOQUE ou contagem manual de produtos
-4. Outro tipo de documento
+Tipo do documento:
+- nota fiscal ou recibo de compra = "entrada"
+- comanda ou pedido de vendas = "saida_ficha"
+- descarte ou uso interno = "saida_manual"
+- outro = "desconhecido"
 
-Produtos cadastrados no estoque:
-${listaProdutos || '(nenhum ainda)'}
+Produtos no estoque:
+${listaProdutos || '(nenhum)'}
 
-Fichas técnicas (pratos/pizzas):
-${listaFichas || '(nenhuma ainda)'}
+Fichas tecnicas:
+${listaFichas || '(nenhuma)'}
 
-Responda APENAS com um JSON válido, sem markdown, sem explicação, no seguinte formato:
-
-{
-  "tipo": "entrada" | "saida_ficha" | "saida_manual" | "desconhecido",
-  "descricao": "breve descrição do que foi identificado na imagem",
-  "itens": [
-    {
-      "nome": "nome do item identificado",
-      "quantidade": número,
-      "unidade": "kg|g|L|ml|un|cx|pct",
-      "nomeCadastrado": "nome exato do produto/ficha cadastrado ou null se não encontrar correspondência"
-    }
-  ],
-  "confianca": "alta" | "media" | "baixa",
-  "observacao": "alguma dúvida ou aviso relevante"
-}
+Retorne SOMENTE este JSON, sem texto adicional:
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome do item","quantidade":1,"unidade":"kg","nomeCadastrado":null}],"confianca":"alta","observacao":""}
 
 Regras:
-- Para notas fiscais de compra → tipo "entrada"
-- Para comandas/pedidos de pizza → tipo "saida_ficha"
-- Para descartes ou uso interno → tipo "saida_manual"
-- Tente associar cada item ao produto cadastrado mais próximo pelo nome
-- Se não tiver certeza de algum valor, coloque confianca "baixa"`
+- Use aspas duplas no JSON
+- quantidade deve ser numero
+- nomeCadastrado deve ser o nome exato do produto/ficha cadastrado acima ou null
+- confianca: "alta", "media" ou "baixa"
+- observacao pode ser string vazia`
 
   const body = {
     model: MODEL,
@@ -54,17 +40,16 @@ Regras:
         ]
       }
     ],
-    max_tokens: 1024,
+    max_tokens: 2048,
     temperature: 0.1,
+    response_format: { type: 'json_object' },
   }
 
-  const res = await fetch(OPENROUTER_URL, {
+  const res = await fetch(GROQ_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://estoquepier.netlify.app',
-      'X-Title': 'Pizzaria Estoque',
     },
     body: JSON.stringify(body),
   })
@@ -78,12 +63,12 @@ Regras:
   const texto = data.choices?.[0]?.message?.content || ''
 
   try {
-    const semMarkdown = texto.replace(/```json\n?|\n?```/g, '').trim()
-    const match = semMarkdown.match(/\{[\s\S]*\}/)
-    if (!match) throw new Error('Resposta: ' + texto.slice(0, 300))
-    return JSON.parse(match[0])
+    const resultado = JSON.parse(texto)
+    if (!resultado.itens) resultado.itens = []
+    if (!resultado.tipo) resultado.tipo = 'desconhecido'
+    return resultado
   } catch (e) {
-    throw new Error(e.message)
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200))
   }
 }
 
