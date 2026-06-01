@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
+import { supabase } from '../lib/supabase'
 import toast from 'react-hot-toast'
 
 export function Login() {
   const { login, registrar, entrarPorConvite } = useAuth()
-  const [modo, setModo] = useState('login') // 'login' | 'registro' | 'convite'
+  const [modo, setModo] = useState('login') // 'login' | 'registro' | 'convite' | 'recuperar'
   const [loading, setLoading] = useState(false)
 
   // Dados do formulário
@@ -22,6 +23,23 @@ export function Login() {
       setModo('convite')
     }
   }, [])
+
+  async function enviarRecuperacao(e) {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      })
+      if (error) throw new Error(error.message)
+      toast.success('E-mail de recuperação enviado! Verifique sua caixa de entrada.')
+      setModo('login')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -60,6 +78,35 @@ export function Login() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-xl p-6 space-y-5">
+          {modo === 'recuperar' && (
+            <>
+              <div className="text-center">
+                <p className="text-2xl mb-1">🔑</p>
+                <h2 className="font-bold text-gray-800">Recuperar Senha</h2>
+                <p className="text-xs text-gray-500 mt-1">Informe seu e-mail e enviaremos um link para redefinir sua senha.</p>
+              </div>
+              <form onSubmit={enviarRecuperacao} className="space-y-3">
+                <div>
+                  <label className="label">E-mail</label>
+                  <input
+                    type="email"
+                    className="input"
+                    placeholder="seu@email.com"
+                    value={email}
+                    onChange={e => setEmail(e.target.value)}
+                    required
+                  />
+                </div>
+                <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
+                  {loading ? 'Enviando...' : 'Enviar link de recuperação'}
+                </button>
+              </form>
+              <button onClick={() => setModo('login')} className="text-xs text-gray-400 underline w-full text-center">
+                Voltar ao login
+              </button>
+            </>
+          )}
+
           {modo === 'convite' && (
             <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
               <p className="text-green-700 font-medium text-sm">🎉 Você foi convidado!</p>
@@ -67,7 +114,7 @@ export function Login() {
             </div>
           )}
 
-          {modo !== 'convite' && (
+          {modo !== 'convite' && modo !== 'recuperar' && (
             <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
               <button
                 onClick={() => setModo('login')}
@@ -84,7 +131,7 @@ export function Login() {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-3">
+          {modo !== 'recuperar' && <form onSubmit={handleSubmit} className="space-y-3">
             {(modo === 'registro' || modo === 'convite') && (
               <div>
                 <label className="label">Seu Nome</label>
@@ -143,7 +190,13 @@ export function Login() {
             >
               {loading ? 'Aguarde...' : modo === 'login' ? 'Entrar' : modo === 'registro' ? 'Criar Conta' : 'Entrar na Equipe'}
             </button>
-          </form>
+          </form>}
+
+          {modo === 'login' && (
+            <button onClick={() => setModo('recuperar')} className="text-xs text-gray-400 underline w-full text-center">
+              Esqueci minha senha
+            </button>
+          )}
 
           {modo === 'convite' && (
             <button onClick={() => setModo('login')} className="text-xs text-gray-400 underline w-full text-center">
