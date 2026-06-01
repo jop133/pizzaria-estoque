@@ -1,5 +1,5 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
-const MODEL = 'qwen/qwen2.5-vl-72b-instruct:free'
+const MODEL = 'google/gemma-3-27b-it:free'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
