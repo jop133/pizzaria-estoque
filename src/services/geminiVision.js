@@ -1,4 +1,4 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
