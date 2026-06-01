@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react'
+import { createContext, useContext, useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 
@@ -9,6 +9,8 @@ export function AuthProvider({ children }) {
   const [membro, setMembro] = useState(null)
   const [organizacao, setOrganizacao] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Evita race condition: bloqueia onAuthStateChange durante registros
+  const bloqueandoRef = useRef(false)
 
   async function carregarPerfil(userId) {
     const { data } = await supabase
@@ -43,6 +45,9 @@ export function AuthProvider({ children }) {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      // Se estiver no meio de um registro/convite, ignora — o próprio método cuida do perfil
+      if (bloqueandoRef.current) return
+
       if (s?.user) {
         setUser(s.user)
         carregarPerfil(s.user.id)
@@ -65,62 +70,76 @@ export function AuthProvider({ children }) {
   }
 
   async function registrar(email, senha, nome, nomeOrg) {
-    const { data, error } = await supabase.auth.signUp({ email, password: senha })
-    if (error) throw new Error(error.message)
-    const userId = data.user?.id
-    if (!userId) throw new Error('Erro ao criar conta')
+    bloqueandoRef.current = true
+    try {
+      const { data, error } = await supabase.auth.signUp({ email, password: senha })
+      if (error) throw new Error(error.message)
+      const userId = data.user?.id
+      if (!userId) throw new Error('Erro ao criar conta')
 
-    // Criar organização
-    const { data: org, error: orgErr } = await supabase
-      .from('organizacoes')
-      .insert({ nome: nomeOrg, dono_id: userId })
-      .select()
-      .single()
-    if (orgErr) throw new Error(orgErr.message)
+      setUser(data.user)
 
-    // Adicionar como Dono
-    const { error: memErr } = await supabase
-      .from('membros')
-      .insert({ organizacao_id: org.id, user_id: userId, papel: 'dono', nome, email })
-    if (memErr) throw new Error(memErr.message)
+      // Criar organização
+      const { data: org, error: orgErr } = await supabase
+        .from('organizacoes')
+        .insert({ nome: nomeOrg, dono_id: userId })
+        .select()
+        .single()
+      if (orgErr) throw new Error('Erro ao criar organização: ' + orgErr.message)
 
-    await carregarPerfil(userId)
+      // Adicionar como Dono
+      const { error: memErr } = await supabase
+        .from('membros')
+        .insert({ organizacao_id: org.id, user_id: userId, papel: 'dono', nome, email })
+      if (memErr) throw new Error('Erro ao criar membro: ' + memErr.message)
+
+      await carregarPerfil(userId)
+    } finally {
+      bloqueandoRef.current = false
+    }
   }
 
   async function entrarPorConvite(email, senha, nome, token) {
-    // Validar convite
-    const { data: convite, error: convErr } = await supabase
-      .from('convites')
-      .select('*')
-      .eq('token', token)
-      .eq('usado', false)
-      .gt('expira_em', new Date().toISOString())
-      .single()
+    bloqueandoRef.current = true
+    try {
+      // Validar convite
+      const { data: convite, error: convErr } = await supabase
+        .from('convites')
+        .select('*')
+        .eq('token', token)
+        .eq('usado', false)
+        .gt('expira_em', new Date().toISOString())
+        .single()
 
-    if (convErr || !convite) throw new Error('Convite inválido ou expirado')
+      if (convErr || !convite) throw new Error('Convite inválido ou expirado')
 
-    // Criar conta (ou login se já existe)
-    let userId
-    const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
-    if (loginErr) {
-      const { data: regData, error: regErr } = await supabase.auth.signUp({ email, password: senha })
-      if (regErr) throw new Error(regErr.message)
-      userId = regData.user?.id
-    } else {
-      userId = loginData.user?.id
+      // Criar conta (ou login se já existe)
+      let userId
+      const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
+      if (loginErr) {
+        const { data: regData, error: regErr } = await supabase.auth.signUp({ email, password: senha })
+        if (regErr) throw new Error(regErr.message)
+        userId = regData.user?.id
+        if (regData.user) setUser(regData.user)
+      } else {
+        userId = loginData.user?.id
+        if (loginData.user) setUser(loginData.user)
+      }
+      if (!userId) throw new Error('Erro na autenticação')
+
+      // Marcar convite como usado
+      await supabase.from('convites').update({ usado: true }).eq('id', convite.id)
+
+      // Adicionar como funcionário
+      const { error: memErr } = await supabase
+        .from('membros')
+        .upsert({ organizacao_id: convite.organizacao_id, user_id: userId, papel: 'funcionario', nome, email })
+      if (memErr) throw new Error(memErr.message)
+
+      await carregarPerfil(userId)
+    } finally {
+      bloqueandoRef.current = false
     }
-    if (!userId) throw new Error('Erro na autenticação')
-
-    // Marcar convite como usado
-    await supabase.from('convites').update({ usado: true }).eq('id', convite.id)
-
-    // Adicionar como funcionário
-    const { error: memErr } = await supabase
-      .from('membros')
-      .upsert({ organizacao_id: convite.organizacao_id, user_id: userId, papel: 'funcionario', nome, email })
-    if (memErr) throw new Error(memErr.message)
-
-    await carregarPerfil(userId)
   }
 
   async function logout() {
