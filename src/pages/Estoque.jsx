@@ -8,15 +8,15 @@ import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
-
 const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoqueMinimo: 0 }
 
 export function Estoque() {
   const produtos = useProdutos()
-  const [modal, setModal] = useState(null) // null | 'novo' | produto
+  const [modal, setModal] = useState(null)
   const [form, setForm] = useState(VAZIO)
   const [busca, setBusca] = useState('')
   const [filtroCategoria, setFiltroCategoria] = useState('')
+  const [selecionados, setSelecionados] = useState(new Set())
   const fileRef = useRef()
 
   const filtrados = produtos.filter(p => {
@@ -24,6 +24,32 @@ export function Estoque() {
     const okCat = !filtroCategoria || p.categoria === filtroCategoria
     return okBusca && okCat
   })
+
+  const todosSelecionados = filtrados.length > 0 && filtrados.every(p => selecionados.has(p.id))
+
+  function toggleSelecionado(id) {
+    setSelecionados(prev => {
+      const novo = new Set(prev)
+      novo.has(id) ? novo.delete(id) : novo.add(id)
+      return novo
+    })
+  }
+
+  function toggleTodos() {
+    if (todosSelecionados) {
+      setSelecionados(new Set())
+    } else {
+      setSelecionados(new Set(filtrados.map(p => p.id)))
+    }
+  }
+
+  async function excluirSelecionados() {
+    if (selecionados.size === 0) return
+    if (!confirm(`Excluir ${selecionados.size} produto(s) selecionado(s)?`)) return
+    await db.produtos.bulkDelete([...selecionados])
+    setSelecionados(new Set())
+    toast.success(`${selecionados.size} produto(s) excluído(s)!`)
+  }
 
   function abrirNovo() { setForm(VAZIO); setModal('novo') }
   function abrirEditar(p) { setForm({ ...p }); setModal(p) }
@@ -93,6 +119,16 @@ export function Estoque() {
         </select>
       </div>
 
+      {selecionados.size > 0 && (
+        <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-medium text-red-700">{selecionados.size} produto(s) selecionado(s)</p>
+          <div className="flex gap-2">
+            <button onClick={() => setSelecionados(new Set())} className="text-xs text-gray-500 underline">Limpar</button>
+            <button onClick={excluirSelecionados} className="btn-danger text-sm py-1">🗑 Excluir selecionados</button>
+          </div>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {filtrados.length === 0 ? (
           <p className="text-gray-400 text-sm p-6 text-center">Nenhum produto encontrado.</p>
@@ -100,6 +136,9 @@ export function Estoque() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
               <tr>
+                <th className="px-4 py-3 w-8">
+                  <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-red-600" />
+                </th>
                 <th className="text-left px-4 py-3">Produto</th>
                 <th className="text-left px-4 py-3 hidden sm:table-cell">Categoria</th>
                 <th className="text-right px-4 py-3">Qtd</th>
@@ -112,7 +151,10 @@ export function Estoque() {
               {filtrados.map(p => {
                 const baixo = p.quantidade <= (p.estoqueMinimo || 0)
                 return (
-                  <tr key={p.id} className="border-t border-gray-100 hover:bg-gray-50">
+                  <tr key={p.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(p.id) ? 'bg-red-50' : ''}`}>
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)} className="w-4 h-4 accent-red-600" />
+                    </td>
                     <td className="px-4 py-3 font-medium text-gray-800">{p.nome}</td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{p.categoria}</td>
                     <td className="px-4 py-3 text-right font-mono">

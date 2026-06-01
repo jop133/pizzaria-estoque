@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoque'
 import { db } from '../db'
+import { analisarFichaTecnica, fileToBase64 } from '../services/geminiVision'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -10,10 +11,68 @@ const VAZIO = { nome: '', categoria: 'Pizza', descricao: '' }
 
 export function FichasTecnicas() {
   const fichas = useFichas()
+  const produtos = useProdutos()
   const [modal, setModal] = useState(null)
   const [detalhe, setDetalhe] = useState(null)
   const [form, setForm] = useState(VAZIO)
   const [busca, setBusca] = useState('')
+  const [modalFoto, setModalFoto] = useState(false)
+  const [fotoAnalise, setFotoAnalise] = useState(null)
+  const [analisando, setAnalisando] = useState(false)
+  const [resultadoFoto, setResultadoFoto] = useState(null)
+  const fileRefFoto = useRef()
+  const cameraRefFoto = useRef()
+
+  const apiKey = localStorage.getItem('gemini_api_key') || ''
+
+  async function analisarFoto(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    setFotoAnalise({ url: URL.createObjectURL(file), file })
+    setResultadoFoto(null)
+    e.target.value = ''
+  }
+
+  async function processarFoto() {
+    if (!fotoAnalise) return
+    if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
+    setAnalisando(true)
+    try {
+      const base64 = await fileToBase64(fotoAnalise.file)
+      const res = await analisarFichaTecnica(base64, fotoAnalise.file.type || 'image/jpeg', produtos, apiKey)
+      setResultadoFoto(res)
+    } catch (e) {
+      toast.error(e.message || 'Erro ao analisar imagem')
+    } finally {
+      setAnalisando(false)
+    }
+  }
+
+  async function salvarFichaFoto() {
+    if (!resultadoFoto) return
+    const fichaId = await db.fichasTecnicas.add({
+      nome: resultadoFoto.nome,
+      categoria: resultadoFoto.categoria || 'Pizza',
+      descricao: resultadoFoto.descricao || '',
+    })
+    for (const ing of resultadoFoto.ingredientes) {
+      const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
+      let prod = produtos.find(p => p.nome.toLowerCase() === busca)
+      if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
+      let produtoId = prod?.id
+      if (!produtoId) {
+        produtoId = await db.produtos.add({
+          nome: ing.nome, categoria: 'Outros',
+          unidade: ing.unidade || 'un', quantidade: 0, estoqueMinimo: 0,
+        })
+      }
+      await db.fichaIngredientes.add({ fichaId, produtoId, quantidade: ing.quantidade })
+    }
+    toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
+    setModalFoto(false)
+    setFotoAnalise(null)
+    setResultadoFoto(null)
+  }
 
   const filtradas = fichas.filter(f => f.nome.toLowerCase().includes(busca.toLowerCase()))
 
@@ -48,7 +107,10 @@ export function FichasTecnicas() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold text-gray-800">Fichas Técnicas</h1>
-        <button onClick={abrirNovo} className="btn-primary text-sm">+ Nova Ficha</button>
+        <div className="flex gap-2">
+          <button onClick={() => setModalFoto(true)} className="btn-secondary text-sm">📷 Importar por Foto</button>
+          <button onClick={abrirNovo} className="btn-primary text-sm">+ Nova Ficha</button>
+        </div>
       </div>
 
       <input
@@ -103,6 +165,60 @@ export function FichasTecnicas() {
               <textarea className="input resize-none" rows={3} value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} placeholder="Descrição opcional..." />
             </div>
             <button onClick={salvar} className="btn-primary w-full">Salvar</button>
+          </div>
+        </Modal>
+      )}
+
+      {modalFoto && (
+        <Modal title="Importar Ficha por Foto" onClose={() => { setModalFoto(false); setFotoAnalise(null); setResultadoFoto(null) }}>
+          <div className="space-y-4">
+            <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center space-y-3">
+              {fotoAnalise ? (
+                <img src={fotoAnalise.url} alt="" className="max-h-48 mx-auto rounded-lg object-contain" />
+              ) : (
+                <p className="text-gray-400 text-sm">Foto da ficha técnica, cardápio ou receita</p>
+              )}
+              <div className="flex gap-2 justify-center flex-wrap">
+                <button onClick={() => fileRefFoto.current.click()} className="btn-secondary text-sm">📁 Arquivo</button>
+                <button onClick={() => cameraRefFoto.current.click()} className="btn-secondary text-sm">📷 Câmera</button>
+              </div>
+              <input ref={fileRefFoto} type="file" accept="image/*" className="hidden" onChange={analisarFoto} />
+              <input ref={cameraRefFoto} type="file" accept="image/*" capture="environment" className="hidden" onChange={analisarFoto} />
+            </div>
+
+            {fotoAnalise && !resultadoFoto && (
+              <button onClick={processarFoto} disabled={analisando} className="btn-primary w-full disabled:opacity-50">
+                {analisando ? 'Analisando...' : '🔍 Analisar com IA'}
+              </button>
+            )}
+
+            {resultadoFoto && (
+              <div className="space-y-3">
+                <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+                  <p className="font-semibold text-gray-800">{resultadoFoto.nome}</p>
+                  <p className="text-xs text-gray-500">{resultadoFoto.descricao}</p>
+                  {resultadoFoto.observacao && <p className="text-xs text-yellow-700">⚠️ {resultadoFoto.observacao}</p>}
+                </div>
+                <p className="text-xs font-medium text-gray-500 uppercase">Ingredientes identificados</p>
+                <div className="space-y-1 max-h-48 overflow-y-auto">
+                  {resultadoFoto.ingredientes.map((ing, i) => {
+                    const prod = produtos.find(p => p.nome.toLowerCase() === (ing.nomeCadastrado || '').toLowerCase())
+                    return (
+                      <div key={i} className="flex items-center justify-between text-sm border border-gray-100 rounded px-3 py-1.5">
+                        <span className="text-gray-700">{ing.nome}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs">{ing.quantidade} {ing.unidade}</span>
+                          {prod ? <Badge color="green">✓</Badge> : <Badge color="gray">Novo</Badge>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+                <button onClick={salvarFichaFoto} className="btn-primary w-full">
+                  ✅ Criar Ficha com {resultadoFoto.ingredientes.length} ingrediente(s)
+                </button>
+              </div>
+            )}
           </div>
         </Modal>
       )}

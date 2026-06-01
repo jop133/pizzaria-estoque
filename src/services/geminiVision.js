@@ -72,6 +72,67 @@ Regras:
   }
 }
 
+export async function analisarFichaTecnica(imageBase64, mimeType, produtos, apiKey) {
+  const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
+
+  const prompt = `Analise a imagem e extraia a ficha tecnica de um prato ou pizza.
+
+Produtos cadastrados no estoque:
+${listaProdutos || '(nenhum)'}
+
+Retorne SOMENTE este JSON, sem texto adicional:
+{"nome":"nome do prato","categoria":"Pizza","descricao":"descricao opcional","ingredientes":[{"nome":"nome do ingrediente","quantidade":0.1,"unidade":"kg","nomeCadastrado":null}],"confianca":"alta","observacao":""}
+
+Regras:
+- Use aspas duplas no JSON
+- quantidade deve ser numero
+- nomeCadastrado deve ser o nome exato do produto cadastrado acima ou null
+- categoria: "Pizza", "Massa", "Molho", "Sobremesa", "Bebida" ou "Outros"
+- confianca: "alta", "media" ou "baixa"
+- observacao pode ser string vazia`
+
+  const body = {
+    model: MODEL,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
+        ]
+      }
+    ],
+    max_tokens: 2048,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }
+
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+  }
+
+  const data = await res.json()
+  const texto = data.choices?.[0]?.message?.content || ''
+
+  try {
+    const resultado = JSON.parse(texto)
+    if (!resultado.ingredientes) resultado.ingredientes = []
+    return resultado
+  } catch (e) {
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200))
+  }
+}
+
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
