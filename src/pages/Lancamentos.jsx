@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { registrarSaidaFicha, registrarSaidaManual, registrarEntrada } from '../services/estoque'
+import { analisarImagemEstoque, fileToBase64 } from '../services/geminiVision'
 import toast from 'react-hot-toast'
 
 const TIPOS = [
@@ -15,6 +16,58 @@ export function Lancamentos() {
   const [tipo, setTipo] = useState('saida_ficha')
   const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '' })
   const [loading, setLoading] = useState(false)
+  const [analisandoFoto, setAnalisandoFoto] = useState(false)
+  const [previewFoto, setPreviewFoto] = useState(null)
+  const fileRef = useRef()
+  const cameraRef = useRef()
+
+  const apiKey = localStorage.getItem('gemini_api_key') || ''
+
+  async function selecionarFoto(e) {
+    const file = e.target.files[0]
+    if (!file) return
+    e.target.value = ''
+    if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
+
+    setPreviewFoto(URL.createObjectURL(file))
+    setAnalisandoFoto(true)
+    try {
+      const base64 = await fileToBase64(file)
+      const res = await analisarImagemEstoque(base64, file.type || 'image/jpeg', produtos, fichas, apiKey)
+
+      // Selecionar tipo baseado no resultado da IA
+      if (res.tipo && res.tipo !== 'desconhecido') setTipo(res.tipo)
+
+      // Preencher o primeiro item identificado
+      const item = res.itens?.[0]
+      if (item) {
+        const qtd = item.quantidade || ''
+        const busca = (item.nomeCadastrado || item.nome || '').toLowerCase()
+
+        if (res.tipo === 'saida_ficha') {
+          const ficha = fichas.find(f => f.nome.toLowerCase() === busca)
+            || fichas.find(f => f.nome.toLowerCase().includes(busca) || busca.includes(f.nome.toLowerCase()))
+          setForm(f => ({ ...f, quantidade: String(qtd), fichaId: ficha ? String(ficha.id) : '' }))
+          if (!ficha && item.nome) toast(`Ficha "${item.nome}" não encontrada — selecione manualmente`, { icon: '⚠️' })
+        } else {
+          const prod = produtos.find(p => p.nome.toLowerCase() === busca)
+            || produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
+          setForm(f => ({ ...f, quantidade: String(qtd), produtoId: prod ? String(prod.id) : '' }))
+          if (!prod && item.nome) toast(`Produto "${item.nome}" não encontrado — selecione manualmente`, { icon: '⚠️' })
+        }
+
+        if (res.itens.length > 1) {
+          toast(`${res.itens.length} itens identificados. Use a aba 📷 Foto IA para lançar todos de uma vez.`, { icon: 'ℹ️', duration: 5000 })
+        }
+      }
+
+      toast.success(`Foto analisada: ${res.descricao || 'itens identificados'}`)
+    } catch (e) {
+      toast.error(e.message || 'Erro ao analisar foto')
+    } finally {
+      setAnalisandoFoto(false)
+    }
+  }
 
   async function lancar() {
     const qtd = parseFloat(form.quantidade)
@@ -36,6 +89,7 @@ export function Lancamentos() {
         toast.success('Entrada registrada! Estoque atualizado.')
       }
       setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '' })
+      setPreviewFoto(null)
     } catch (e) {
       toast.error(e.message || 'Erro ao lançar')
     } finally {
@@ -53,7 +107,7 @@ export function Lancamentos() {
         {TIPOS.map(t => (
           <button
             key={t.value}
-            onClick={() => setTipo(t.value)}
+            onClick={() => { setTipo(t.value); setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '' }); setPreviewFoto(null) }}
             className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
               tipo === t.value
                 ? t.color + ' border-current ring-1 ring-current opacity-100'
@@ -66,7 +120,35 @@ export function Lancamentos() {
       </div>
 
       <div className={`bg-white border-2 rounded-xl p-5 space-y-4 ${currentTipo.color}`}>
-        <h2 className="font-semibold text-gray-700">{currentTipo.label}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-gray-700">{currentTipo.label}</h2>
+          <button
+            onClick={() => fileRef.current.click()}
+            disabled={analisandoFoto}
+            className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
+          >
+            {analisandoFoto ? (
+              <>
+                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                </svg>
+                Analisando...
+              </>
+            ) : '📷 Preencher por foto'}
+          </button>
+        </div>
+
+        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={selecionarFoto} />
+        <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={selecionarFoto} />
+
+        {previewFoto && (
+          <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-2">
+            <img src={previewFoto} alt="" className="w-12 h-12 object-cover rounded" />
+            <p className="text-xs text-gray-500 flex-1">Foto analisada — confira e ajuste os campos abaixo</p>
+            <button onClick={() => setPreviewFoto(null)} className="text-gray-300 hover:text-gray-500">✕</button>
+          </div>
+        )}
 
         {tipo === 'saida_ficha' ? (
           <div>
@@ -114,11 +196,7 @@ export function Lancamentos() {
           />
         </div>
 
-        <button
-          onClick={lancar}
-          disabled={loading}
-          className="btn-primary w-full disabled:opacity-50"
-        >
+        <button onClick={lancar} disabled={loading} className="btn-primary w-full disabled:opacity-50">
           {loading ? 'Processando...' : 'Confirmar Lançamento'}
         </button>
       </div>
