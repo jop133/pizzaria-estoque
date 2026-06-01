@@ -80,10 +80,10 @@ Regras:
   try {
     const semMarkdown = texto.replace(/```json\n?|\n?```/g, '').trim()
     const match = semMarkdown.match(/\{[\s\S]*\}/)
-    if (!match) throw new Error('JSON não encontrado')
+    if (!match) throw new Error('Resposta: ' + texto.slice(0, 300))
     return JSON.parse(match[0])
-  } catch {
-    throw new Error('Não foi possível interpretar a resposta da IA. Tente novamente.')
+  } catch (e) {
+    throw new Error(e.message)
   }
 }
 
