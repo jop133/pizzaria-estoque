@@ -78,8 +78,10 @@ Regras:
   const texto = data.choices?.[0]?.message?.content || ''
 
   try {
-    const json = texto.replace(/```json\n?|\n?```/g, '').trim()
-    return JSON.parse(json)
+    const semMarkdown = texto.replace(/```json\n?|\n?```/g, '').trim()
+    const match = semMarkdown.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('JSON não encontrado')
+    return JSON.parse(match[0])
   } catch {
     throw new Error('Não foi possível interpretar a resposta da IA. Tente novamente.')
   }
