@@ -145,14 +145,14 @@ export function ImportarFoto() {
       {/* Chave API */}
       {editandoChave ? (
         <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-          <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Gemini (gratuita)</p>
-          <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">aistudio.google.com/apikey</span></p>
-          <input className="input" placeholder="AIzaSy..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
+          <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave OpenRouter (gratuita)</p>
+          <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">openrouter.ai/keys</span></p>
+          <input className="input" placeholder="sk-or-..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
           <button onClick={salvarChave} className="btn-primary w-full">Salvar Chave</button>
         </div>
       ) : (
         <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
-          <p className="text-sm text-green-700 font-medium">✅ API Gemini configurada</p>
+          <p className="text-sm text-green-700 font-medium">✅ API OpenRouter configurada</p>
           <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
         </div>
       )}

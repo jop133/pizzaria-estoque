@@ -1,4 +1,5 @@
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent'
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const MODEL = 'meta-llama/llama-4-maverick:free'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
@@ -43,18 +44,28 @@ Regras:
 - Se não tiver certeza de algum valor, coloque confianca "baixa"`
 
   const body = {
-    contents: [{
-      parts: [
-        { text: prompt },
-        { inline_data: { mime_type: mimeType, data: imageBase64 } }
-      ]
-    }],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 1024 }
+    model: MODEL,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
+        ]
+      }
+    ],
+    max_tokens: 1024,
+    temperature: 0.1,
   }
 
-  const res = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
+  const res = await fetch(OPENROUTER_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://estoquepier.netlify.app',
+      'X-Title': 'Pizzaria Estoque',
+    },
     body: JSON.stringify(body),
   })
 
@@ -64,7 +75,7 @@ Regras:
   }
 
   const data = await res.json()
-  const texto = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+  const texto = data.choices?.[0]?.message?.content || ''
 
   try {
     const json = texto.replace(/```json\n?|\n?```/g, '').trim()
