@@ -198,8 +198,8 @@ export function fileToBase64(file) {
 
 // Pré-processa a foto antes de enviar à IA: redimensiona, converte para escala
 // de cinza, aumenta o contraste e aplica nitidez (unsharp mask), deixando o
-// texto bem mais crocante para a leitura. Retorna { base64, mimeType } PNG
-// (sem perdas, preserva as bordas das letras).
+// texto bem mais crocante para a leitura. Retorna { base64, mimeType } JPEG
+// em qualidade alta (mantém nitidez com upload bem mais leve que PNG).
 // Em caso de qualquer falha, cai de volta no arquivo original.
 export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45, nitidez = 0.8 } = {}) {
   try {
@@ -248,8 +248,8 @@ export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45,
     }
     ctx.putImageData(img, 0, 0)
 
-    const dataUrl = canvas.toDataURL('image/png')
-    return { base64: dataUrl.split(',')[1], mimeType: 'image/png' }
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+    return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' }
   } catch {
     const base64 = await fileToBase64(file)
     return { base64, mimeType: file.type || 'image/jpeg' }
