@@ -9,7 +9,6 @@ export function AuthProvider({ children }) {
   const [membro, setMembro] = useState(null)
   const [organizacao, setOrganizacao] = useState(null)
   const [loading, setLoading] = useState(true)
-  // Evita race condition: bloqueia onAuthStateChange durante registros
   const bloqueandoRef = useRef(false)
 
   async function carregarPerfil(userId) {
@@ -45,9 +44,7 @@ export function AuthProvider({ children }) {
     })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
-      // Se estiver no meio de um registro/convite, ignora — o próprio método cuida do perfil
       if (bloqueandoRef.current) return
-
       if (s?.user) {
         setUser(s.user)
         carregarPerfil(s.user.id)
@@ -69,40 +66,44 @@ export function AuthProvider({ children }) {
     if (error) throw new Error(error.message)
   }
 
-  async function registrar(email, senha, nome, nomeOrg) {
+  // Apenas cria a conta — organização é criada separadamente
+  async function registrar(email, senha, nome) {
     bloqueandoRef.current = true
     try {
       const { data, error } = await supabase.auth.signUp({ email, password: senha })
       if (error) throw new Error(error.message)
       const userId = data.user?.id
       if (!userId) throw new Error('Erro ao criar conta')
-
       setUser(data.user)
-
-      // Criar organização
-      const { data: org, error: orgErr } = await supabase
-        .from('organizacoes')
-        .insert({ nome: nomeOrg, dono_id: userId })
-        .select()
-        .single()
-      if (orgErr) throw new Error('Erro ao criar organização: ' + orgErr.message)
-
-      // Adicionar como Dono
-      const { error: memErr } = await supabase
-        .from('membros')
-        .insert({ organizacao_id: org.id, user_id: userId, papel: 'dono', nome, email })
-      if (memErr) throw new Error('Erro ao criar membro: ' + memErr.message)
-
-      await carregarPerfil(userId)
+      // Não carrega perfil ainda — usuário ainda não tem organização
     } finally {
       bloqueandoRef.current = false
     }
   }
 
+  // Cria organização para o usuário logado e o torna Dono
+  async function criarOrganizacao(nomeOrg) {
+    const { data: { user: u } } = await supabase.auth.getUser()
+    if (!u) throw new Error('Não autenticado')
+
+    const { data: org, error: orgErr } = await supabase
+      .from('organizacoes')
+      .insert({ nome: nomeOrg, dono_id: u.id })
+      .select()
+      .single()
+    if (orgErr) throw new Error('Erro ao criar organização: ' + orgErr.message)
+
+    const { error: memErr } = await supabase
+      .from('membros')
+      .insert({ organizacao_id: org.id, user_id: u.id, papel: 'dono', nome: u.email, email: u.email })
+    if (memErr) throw new Error('Erro ao criar membro: ' + memErr.message)
+
+    await carregarPerfil(u.id)
+  }
+
   async function entrarPorConvite(email, senha, nome, token) {
     bloqueandoRef.current = true
     try {
-      // Validar convite
       const { data: convite, error: convErr } = await supabase
         .from('convites')
         .select('*')
@@ -113,8 +114,8 @@ export function AuthProvider({ children }) {
 
       if (convErr || !convite) throw new Error('Convite inválido ou expirado')
 
-      // Criar conta (ou login se já existe)
       let userId
+      // Tenta login primeiro; se falhar, cria conta
       const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
       if (loginErr) {
         const { data: regData, error: regErr } = await supabase.auth.signUp({ email, password: senha })
@@ -127,10 +128,8 @@ export function AuthProvider({ children }) {
       }
       if (!userId) throw new Error('Erro na autenticação')
 
-      // Marcar convite como usado
       await supabase.from('convites').update({ usado: true }).eq('id', convite.id)
 
-      // Adicionar como funcionário
       const { error: memErr } = await supabase
         .from('membros')
         .upsert({ organizacao_id: convite.organizacao_id, user_id: userId, papel: 'funcionario', nome, email })
@@ -161,6 +160,7 @@ export function AuthProvider({ children }) {
     isAdmin: membro?.papel === 'admin' || membro?.papel === 'dono',
     login,
     registrar,
+    criarOrganizacao,
     entrarPorConvite,
     logout,
     recarregarPerfil,

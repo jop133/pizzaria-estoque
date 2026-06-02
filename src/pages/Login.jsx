@@ -4,11 +4,10 @@ import { supabase } from '../lib/supabase'
 import toast from 'react-hot-toast'
 
 export function Login() {
-  const { login, registrar, entrarPorConvite } = useAuth()
-  const [modo, setModo] = useState('login') // 'login' | 'registro' | 'convite' | 'recuperar'
+  const { login, registrar, criarOrganizacao, entrarPorConvite, user } = useAuth()
+  const [modo, setModo] = useState('login') // 'login' | 'registro' | 'criar_org' | 'convite' | 'recuperar'
   const [loading, setLoading] = useState(false)
 
-  // Dados do formulário
   const [email, setEmail] = useState('')
   const [senha, setSenha] = useState('')
   const [nome, setNome] = useState('')
@@ -24,7 +23,70 @@ export function Login() {
     }
   }, [])
 
-  async function enviarRecuperacao(e) {
+  // Se o usuário está logado mas sem org, vai para tela de criar org
+  useEffect(() => {
+    if (user && modo !== 'criar_org' && modo !== 'convite') {
+      setModo('criar_org')
+    }
+  }, [user])
+
+  async function handleLogin(e) {
+    e.preventDefault()
+    setLoading(true)
+    try {
+      await login(email, senha)
+      toast.success('Bem-vindo!')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleRegistro(e) {
+    e.preventDefault()
+    if (!nome.trim()) return toast.error('Informe seu nome')
+    setLoading(true)
+    try {
+      await registrar(email, senha, nome.trim())
+      setModo('criar_org')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleCriarOrg(e) {
+    e.preventDefault()
+    if (!nomeOrg.trim()) return toast.error('Informe o nome da organização')
+    setLoading(true)
+    try {
+      await criarOrganizacao(nomeOrg.trim())
+      toast.success('Organização criada! Bem-vindo!')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleConvite(e) {
+    e.preventDefault()
+    if (!nome.trim()) return toast.error('Informe seu nome')
+    setLoading(true)
+    try {
+      await entrarPorConvite(email, senha, nome.trim(), token)
+      toast.success('Você entrou na organização!')
+      window.history.replaceState({}, '', window.location.pathname)
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleRecuperar(e) {
     e.preventDefault()
     setLoading(true)
     try {
@@ -41,36 +103,14 @@ export function Login() {
     }
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      if (modo === 'login') {
-        await login(email, senha)
-        toast.success('Bem-vindo!')
-      } else if (modo === 'registro') {
-        if (!nome.trim()) return toast.error('Informe seu nome')
-        if (!nomeOrg.trim()) return toast.error('Informe o nome da sua pizzaria/empresa')
-        await registrar(email, senha, nome.trim(), nomeOrg.trim())
-        toast.success('Conta criada! Bem-vindo!')
-      } else if (modo === 'convite') {
-        if (!nome.trim()) return toast.error('Informe seu nome')
-        await entrarPorConvite(email, senha, nome.trim(), token)
-        toast.success('Você entrou na organização!')
-        // limpar token da URL
-        window.history.replaceState({}, '', window.location.pathname)
-      }
-    } catch (err) {
-      toast.error(err.message)
-    } finally {
-      setLoading(false)
-    }
+  async function sair() {
+    await supabase.auth.signOut()
+    setModo('login')
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        {/* Logo */}
         <div className="text-center mb-8">
           <div className="text-6xl mb-2">🍕</div>
           <h1 className="text-white text-2xl font-bold">Pier Pizza & Cantina</h1>
@@ -78,6 +118,64 @@ export function Login() {
         </div>
 
         <div className="bg-white rounded-2xl shadow-xl p-6 space-y-5">
+
+          {/* ── CRIAR ORGANIZAÇÃO ── */}
+          {modo === 'criar_org' && (
+            <>
+              <div className="text-center space-y-1">
+                <p className="text-3xl">🏢</p>
+                <h2 className="font-bold text-gray-800">Criar Organização</h2>
+                <p className="text-xs text-gray-500">Dê um nome para sua pizzaria ou empresa. Todos os membros convidados compartilharão o mesmo estoque.</p>
+              </div>
+              <form onSubmit={handleCriarOrg} className="space-y-3">
+                <div>
+                  <label className="label">Nome da Pizzaria / Empresa</label>
+                  <input
+                    className="input"
+                    placeholder="Ex: Pier Pizza & Cantina"
+                    value={nomeOrg}
+                    onChange={e => setNomeOrg(e.target.value)}
+                    required
+                  />
+                </div>
+                <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
+                  {loading ? 'Criando...' : '✅ Criar Organização'}
+                </button>
+              </form>
+              <button onClick={sair} className="text-xs text-gray-400 underline w-full text-center">
+                Voltar ao login
+              </button>
+            </>
+          )}
+
+          {/* ── CONVITE ── */}
+          {modo === 'convite' && (
+            <>
+              <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+                <p className="text-green-700 font-medium text-sm">🎉 Você foi convidado!</p>
+                <p className="text-green-600 text-xs mt-1">Faça login ou crie sua conta para entrar na equipe.</p>
+              </div>
+              <form onSubmit={handleConvite} className="space-y-3">
+                <div>
+                  <label className="label">Seu Nome</label>
+                  <input className="input" placeholder="Ex: João Silva" value={nome} onChange={e => setNome(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="label">E-mail</label>
+                  <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
+                </div>
+                <div>
+                  <label className="label">Senha</label>
+                  <input type="password" className="input" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} minLength={6} required />
+                </div>
+                <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
+                  {loading ? 'Aguarde...' : 'Entrar na Equipe'}
+                </button>
+              </form>
+            </>
+          )}
+
+          {/* ── RECUPERAR SENHA ── */}
           {modo === 'recuperar' && (
             <>
               <div className="text-center">
@@ -85,17 +183,10 @@ export function Login() {
                 <h2 className="font-bold text-gray-800">Recuperar Senha</h2>
                 <p className="text-xs text-gray-500 mt-1">Informe seu e-mail e enviaremos um link para redefinir sua senha.</p>
               </div>
-              <form onSubmit={enviarRecuperacao} className="space-y-3">
+              <form onSubmit={handleRecuperar} className="space-y-3">
                 <div>
                   <label className="label">E-mail</label>
-                  <input
-                    type="email"
-                    className="input"
-                    placeholder="seu@email.com"
-                    value={email}
-                    onChange={e => setEmail(e.target.value)}
-                    required
-                  />
+                  <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
                 </div>
                 <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
                   {loading ? 'Enviando...' : 'Enviar link de recuperação'}
@@ -107,109 +198,66 @@ export function Login() {
             </>
           )}
 
-          {modo === 'convite' && (
-            <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
-              <p className="text-green-700 font-medium text-sm">🎉 Você foi convidado!</p>
-              <p className="text-green-600 text-xs mt-1">Crie sua conta ou faça login para entrar na equipe.</p>
-            </div>
-          )}
-
-          {modo !== 'convite' && modo !== 'recuperar' && (
-            <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-              <button
-                onClick={() => setModo('login')}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'login' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
-              >
-                Entrar
-              </button>
-              <button
-                onClick={() => setModo('registro')}
-                className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'registro' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
-              >
-                Criar Conta
-              </button>
-            </div>
-          )}
-
-          {modo !== 'recuperar' && <form onSubmit={handleSubmit} className="space-y-3">
-            {(modo === 'registro' || modo === 'convite') && (
-              <div>
-                <label className="label">Seu Nome</label>
-                <input
-                  className="input"
-                  placeholder="Ex: João Silva"
-                  value={nome}
-                  onChange={e => setNome(e.target.value)}
-                  required
-                />
+          {/* ── LOGIN / REGISTRO ── */}
+          {(modo === 'login' || modo === 'registro') && (
+            <>
+              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                <button
+                  onClick={() => setModo('login')}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'login' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+                >
+                  Entrar
+                </button>
+                <button
+                  onClick={() => setModo('registro')}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'registro' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+                >
+                  Criar Conta
+                </button>
               </div>
-            )}
 
-            {modo === 'registro' && (
-              <div>
-                <label className="label">Nome da Pizzaria / Empresa</label>
-                <input
-                  className="input"
-                  placeholder="Ex: Pier Pizza & Cantina"
-                  value={nomeOrg}
-                  onChange={e => setNomeOrg(e.target.value)}
-                  required
-                />
-              </div>
-            )}
+              {modo === 'login' && (
+                <form onSubmit={handleLogin} className="space-y-3">
+                  <div>
+                    <label className="label">E-mail</label>
+                    <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
+                  </div>
+                  <div>
+                    <label className="label">Senha</label>
+                    <input type="password" className="input" placeholder="Sua senha" value={senha} onChange={e => setSenha(e.target.value)} required />
+                  </div>
+                  <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
+                    {loading ? 'Aguarde...' : 'Entrar'}
+                  </button>
+                  <button type="button" onClick={() => setModo('recuperar')} className="text-xs text-gray-400 underline w-full text-center">
+                    Esqueci minha senha
+                  </button>
+                </form>
+              )}
 
-            <div>
-              <label className="label">E-mail</label>
-              <input
-                type="email"
-                className="input"
-                placeholder="seu@email.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
-            </div>
-
-            <div>
-              <label className="label">Senha</label>
-              <input
-                type="password"
-                className="input"
-                placeholder="Mínimo 6 caracteres"
-                value={senha}
-                onChange={e => setSenha(e.target.value)}
-                minLength={6}
-                required
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary w-full disabled:opacity-50 mt-2"
-            >
-              {loading ? 'Aguarde...' : modo === 'login' ? 'Entrar' : modo === 'registro' ? 'Criar Conta' : 'Entrar na Equipe'}
-            </button>
-          </form>}
-
-          {modo === 'login' && (
-            <button onClick={() => setModo('recuperar')} className="text-xs text-gray-400 underline w-full text-center">
-              Esqueci minha senha
-            </button>
+              {modo === 'registro' && (
+                <form onSubmit={handleRegistro} className="space-y-3">
+                  <div>
+                    <label className="label">Seu Nome</label>
+                    <input className="input" placeholder="Ex: João Silva" value={nome} onChange={e => setNome(e.target.value)} required />
+                  </div>
+                  <div>
+                    <label className="label">E-mail</label>
+                    <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
+                  </div>
+                  <div>
+                    <label className="label">Senha</label>
+                    <input type="password" className="input" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} minLength={6} required />
+                  </div>
+                  <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
+                    {loading ? 'Aguarde...' : 'Criar Conta'}
+                  </button>
+                </form>
+              )}
+            </>
           )}
 
-          {modo === 'convite' && (
-            <button onClick={() => setModo('login')} className="text-xs text-gray-400 underline w-full text-center">
-              Já tenho conta — fazer login
-            </button>
-          )}
         </div>
-
-        {modo === 'registro' && (
-          <p className="text-center text-red-200 text-xs mt-4">
-            Ao criar conta você se torna o <strong>Dono</strong> da organização
-          </p>
-        )}
       </div>
     </div>
   )

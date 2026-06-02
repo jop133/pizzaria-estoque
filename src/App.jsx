@@ -39,26 +39,7 @@ function AppInner() {
     )
   }
 
-  if (!user) return <Login />
-
-  // Usuário logado mas sem organização (raro, edge case)
-  if (!membro) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl p-6 max-w-sm w-full text-center space-y-4 shadow-lg">
-          <p className="text-4xl">⚠️</p>
-          <h2 className="font-bold text-gray-800">Sem organização</h2>
-          <p className="text-sm text-gray-500">Você não está vinculado a nenhuma organização. Peça um convite ao Dono ou crie uma nova conta.</p>
-          <button
-            onClick={async () => { const { supabase } = await import('./lib/supabase'); await supabase.auth.signOut() }}
-            className="btn-primary w-full"
-          >
-            Sair e tentar novamente
-          </button>
-        </div>
-      </div>
-    )
-  }
+  if (!user || !membro) return <Login />
 
   const renderPage = () => {
     switch (aba) {
