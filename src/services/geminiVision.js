@@ -132,17 +132,25 @@ export async function agruparPorTipo(nomes, apiKey) {
   const unicos = [...new Set((nomes || []).map(n => (n || '').trim()).filter(Boolean))]
   if (unicos.length === 0) return {}
 
-  const prompt = `Voce agrupa nomes de produtos de estoque por TIPO, ignorando marca, peso, volume e embalagem.
-Para cada nome da lista, devolva "nomeBase" = o tipo do produto, sem marca, sem peso e sem volume.
-Nomes do MESMO tipo (marcas ou pesos diferentes) devem ter EXATAMENTE o mesmo nomeBase.
-Tipos diferentes ficam distintos (ex: "Queijo Mussarela" e diferente de "Queijo Gorgonzola").
-Use o mesmo idioma e uma capitalizacao natural (ex: "Queijo Mussarela").
+  const prompt = `Para cada nome da lista, gere um "nomeBase" = o MESMO nome do produto, apenas REMOVENDO marca, peso, volume e embalagem. Nada mais.
+
+REGRA CRITICA: nomeBase NAO e categoria. NUNCA agrupe produtos diferentes sob um nome geral.
+- ERRADO: "Mamao", "Maca", "Limao" -> "Frutas". CERTO: continuam "Mamao", "Maca", "Limao" (cada um o seu).
+- ERRADO: "Coxa de Frango", "Peito de Frango" -> "Frango". CERTO: "Coxa de Frango" e "Peito de Frango" (distintos).
+- ERRADO: "Detergente", "Sabao em Po", "Agua Sanitaria" -> "Limpeza". CERTO: cada um o seu.
+
+So use o MESMO nomeBase para dois itens quando forem REALMENTE o mesmo produto, mudando apenas a marca/peso/embalagem:
+- "Queijo Mussarela Tirolez 1kg" e "Queijo Mussarela Polenghi 500g" -> ambos "Queijo Mussarela".
+- "Coca-Cola 2L" e "Coca-Cola Lata 350ml" -> ambos "Coca-Cola".
+- "Queijo Mussarela" e "Queijo Gorgonzola" -> DISTINTOS (sao tipos diferentes de queijo).
+
+Na duvida, NAO agrupe: mantenha o nome do item praticamente como esta (so tirando marca/peso). E melhor deixar separado do que juntar errado.
 
 Lista:
 ${unicos.map((n, i) => `${i + 1}. ${n}`).join('\n')}
 
 Retorne SOMENTE este JSON, com um item para CADA nome da lista:
-{"itens":[{"nome":"nome exatamente como na lista","nomeBase":"tipo do produto"}]}`
+{"itens":[{"nome":"nome exatamente como na lista","nomeBase":"nome sem marca/peso"}]}`
 
   const body = {
     model: MODEL_TEXTO,
