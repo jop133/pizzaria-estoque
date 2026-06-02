@@ -84,6 +84,30 @@ export function ImportarFoto() {
     return fatores[`${produtoU}|${pesoU}`]
   }
 
+  // Unidade-base para um peso lido: g/kg -> kg, ml/l -> l. Senão null.
+  function unidadeBaseDoPeso(unidadePeso) {
+    const u = (unidadePeso || '').toLowerCase()
+    if (u === 'g' || u === 'kg') return 'kg'
+    if (u === 'ml' || u === 'l') return 'l'
+    return null
+  }
+
+  // A IA leu um peso/volume de embalagem válido para este item?
+  function temPeso(item) {
+    const valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
+    return !!valor && UNIDADES_PESO.includes((item.unidadeEmbalagem || '').toLowerCase())
+  }
+
+  // Unidade em que o item será contabilizado no estoque:
+  // - produto já vinculado: a unidade dele.
+  // - produto novo com peso lido: a unidade-base do peso (kg/l).
+  // - caso contrário: a unidade lida pela IA ou 'un'.
+  function unidadeAlvoDoItem(item, produtoVinculado) {
+    if (produtoVinculado) return (produtoVinculado.unidade || '').toLowerCase()
+    if (temPeso(item)) return unidadeBaseDoPeso(item.unidadeEmbalagem)
+    return (item.unidade || 'un').toLowerCase()
+  }
+
   // Calcula o total que vai para o estoque a partir de contagem x peso.
   // Retorna { precisaPeso, total }. precisaPeso=true quando o produto é
   // por peso/volume mas o peso da embalagem não foi informado.
@@ -179,31 +203,38 @@ export function ImportarFoto() {
         try {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
+          const vaiCriar = !produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha'
 
-          if (!produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha') {
+          // Unidade em que o item será contabilizado (produto existente, novo
+          // com peso, ou unidade simples). Definida ANTES de criar o produto.
+          let unidadeAlvo
+          if (produtoId) {
+            unidadeAlvo = (produtos.find(p => p.id === produtoId)?.unidade || '').toLowerCase()
+          } else if (vaiCriar) {
+            unidadeAlvo = unidadeAlvoDoItem(item, null)
+          }
+
+          // Total que vai para o estoque: contagem x peso convertido (unidades
+          // de peso/volume) ou a própria contagem. Calculado antes de criar para
+          // não gerar produto quando o peso ainda falta.
+          let quantidadeFinal = parseFloat(item.quantidade) || 0
+          if (!fichaId && UNIDADES_PESO.includes(unidadeAlvo)) {
+            const { precisaPeso, total } = calcularTotal(item, unidadeAlvo)
+            if (precisaPeso || !total) { semPeso++; continue }
+            quantidadeFinal = total
+          }
+
+          if (vaiCriar) {
             const { data: novo } = await supabase.from('produtos').insert({
               organizacao_id: session.organizacaoId,
               nome: item.nome,
               categoria: 'Outros',
-              unidade: item.unidade || 'un',
+              unidade: unidadeAlvo || 'un',
               quantidade: 0,
               estoque_minimo: 0,
             }).select().single()
             produtoId = novo?.id
             criados++
-          }
-
-          // Total que vai para o estoque: contagem x peso convertido (produtos
-          // por peso/volume) ou a própria contagem (unidade / fichas).
-          let quantidadeFinal = parseFloat(item.quantidade) || 0
-          if (produtoId && !fichaId) {
-            const prod = produtos.find(p => p.id === produtoId)
-            const prodUnidade = (prod?.unidade || '').toLowerCase()
-            if (UNIDADES_PESO.includes(prodUnidade)) {
-              const { precisaPeso, total } = calcularTotal(item, prodUnidade)
-              if (precisaPeso || !total) { semPeso++; continue }
-              quantidadeFinal = total
-            }
           }
 
           if (foto.resultado.tipo === 'entrada') {
@@ -328,9 +359,10 @@ export function ImportarFoto() {
                       const produtoVinculado = produtos.find(p => p.id === item.produtoId)
                       const fichaVinculada = fichas.find(f => f.id === item.fichaId)
                       const vinculo = fichaVinculada || produtoVinculado
-                      const prodUnidade = (produtoVinculado?.unidade || '').toLowerCase()
-                      const usaPeso = !fichaVinculada && produtoVinculado && UNIDADES_PESO.includes(prodUnidade)
-                      const { precisaPeso, total } = usaPeso ? calcularTotal(item, prodUnidade) : { precisaPeso: false, total: null }
+                      // Unidade-alvo: do produto vinculado, ou (produto novo) a base do peso lido.
+                      const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
+                      const usaPeso = !fichaVinculada && foto.resultado.tipo !== 'saida_ficha' && UNIDADES_PESO.includes(unidadeAlvo)
+                      const { precisaPeso, total } = usaPeso ? calcularTotal(item, unidadeAlvo) : { precisaPeso: false, total: null }
                       return (
                         <div key={i} className={`border rounded-lg p-2 space-y-2 ${!item.ativo ? 'border-gray-100 opacity-50' : precisaPeso ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'}`}>
                           <div className="flex items-center gap-2">
@@ -377,7 +409,7 @@ export function ImportarFoto() {
                                 </div>
                                 <span className="pb-2 text-gray-400 text-sm">=</span>
                                 <div className="pb-2 text-sm font-semibold text-gray-700">
-                                  {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${prodUnidade}`}
+                                  {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${unidadeAlvo}`}
                                 </div>
                               </div>
                               <div>
