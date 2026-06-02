@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
-import { analisarImagemEstoque, prepararImagem } from '../services/geminiVision'
+import { analisarImagemEstoque, prepararImagem, agruparPorTipo } from '../services/geminiVision'
 import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../services/estoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
@@ -84,6 +84,26 @@ export function ImportarFoto() {
     return fatores[`${produtoU}|${pesoU}`]
   }
 
+  const normalizar = s => (s || '').trim().toLowerCase()
+
+  // Item que será criado como produto novo (não cadastrado, ativo, sem ficha e
+  // a foto não é saída por ficha).
+  function ehProdutoNovo(item, tipoFoto) {
+    return item.ativo && !item.produtoId && !item.fichaId && tipoFoto !== 'saida_ficha'
+  }
+
+  // Quantos itens (em toda a fila) serão unidos no mesmo produto novo.
+  function contarNoGrupo(baseKey) {
+    let n = 0
+    for (const f of fila) {
+      if (f.status !== 'pronto') continue
+      for (const it of f.itens) {
+        if (ehProdutoNovo(it, f.resultado?.tipo) && normalizar(it.nomeBase || it.nome) === baseKey) n++
+      }
+    }
+    return n
+  }
+
   // Unidade-base para um peso lido: g/kg -> kg, ml/l -> l. Senão null.
   function unidadeBaseDoPeso(unidadePeso) {
     const u = (unidadePeso || '').toLowerCase()
@@ -135,54 +155,82 @@ export function ImportarFoto() {
     return parcial?.id ?? null
   }
 
+  // Monta um item da revisão a partir do que a IA leu, resolvendo vínculo,
+  // peso/volume e nomeBase (tipo do produto, vindo do agrupamento por texto).
+  function construirItem(item, mapaBase) {
+    const nomeBase = (mapaBase[(item.nome || '').trim()] || item.nome || '').trim()
+
+    // Vínculo: tenta pelo nome lido; se não achar, tenta pelo nomeBase (tipo).
+    let produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
+    if (!produtoId && nomeBase) produtoId = encontrarProdutoId(null, nomeBase)
+    let fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
+    if (!fichaId && nomeBase) fichaId = encontrarFichaId(null, nomeBase)
+
+    const prod = produtos.find(p => p.id === produtoId)
+    const prodUnidade = (prod?.unidade || '').toLowerCase()
+
+    let pesoEmbalagem = item.pesoEmbalagem ?? ''
+    let unidadeEmbalagem = (item.unidadeEmbalagem || '').toLowerCase()
+    // Se a IA não preencheu peso/volume explícito (comum em líquidos),
+    // tenta extrair do próprio nome do item (ex: "OLEO 900ML" -> 900 ml).
+    const temExplicito = String(pesoEmbalagem).trim() !== '' && UNIDADES_PESO.includes(unidadeEmbalagem)
+    if (!temExplicito) {
+      const m = (item.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
+      if (m) {
+        pesoEmbalagem = parseFloat(m[1].replace(',', '.'))
+        unidadeEmbalagem = m[2].toLowerCase()
+      }
+    }
+    // Se o produto é por peso e ainda não há unidade da embalagem,
+    // assume a própria unidade do produto como padrão para o usuário ajustar.
+    if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
+      unidadeEmbalagem = prodUnidade
+    }
+    return {
+      ...item,
+      ativo: true,
+      marca: item.marca || '',
+      produtoId,
+      fichaId,
+      quantidade: item.quantidade ?? 1,
+      pesoEmbalagem,
+      unidadeEmbalagem,
+      nomeBase,
+    }
+  }
+
   async function analisarTodas() {
     if (!apiKey) return toast.error('Configure a chave da API primeiro')
     const pendentes = fila.filter(f => f.status === 'aguardando')
     if (!pendentes.length) return toast.error('Nenhuma foto aguardando análise')
 
+    // 1) Leitura por visão (uma chamada por foto) — inalterada.
+    const analisadas = []
     for (const foto of pendentes) {
       setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'analisando' } : f))
       try {
         const { base64, mimeType } = await prepararImagem(foto.file)
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
-        const itens = res.itens.map(item => {
-          const produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
-          const fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
-          const prod = produtos.find(p => p.id === produtoId)
-          const prodUnidade = (prod?.unidade || '').toLowerCase()
-
-          let pesoEmbalagem = item.pesoEmbalagem ?? ''
-          let unidadeEmbalagem = (item.unidadeEmbalagem || '').toLowerCase()
-          // Se a IA não preencheu peso/volume explícito (comum em líquidos),
-          // tenta extrair do próprio nome do item (ex: "OLEO 900ML" -> 900 ml).
-          const temExplicito = String(pesoEmbalagem).trim() !== '' && UNIDADES_PESO.includes(unidadeEmbalagem)
-          if (!temExplicito) {
-            const m = (item.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-            if (m) {
-              pesoEmbalagem = parseFloat(m[1].replace(',', '.'))
-              unidadeEmbalagem = m[2].toLowerCase()
-            }
-          }
-          // Se o produto é por peso e ainda não há unidade da embalagem,
-          // assume a própria unidade do produto como padrão para o usuário ajustar.
-          if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
-            unidadeEmbalagem = prodUnidade
-          }
-          return {
-            ...item,
-            ativo: true,
-            marca: item.marca || '',
-            produtoId,
-            fichaId,
-            quantidade: item.quantidade ?? 1,
-            pesoEmbalagem,
-            unidadeEmbalagem,
-          }
-        })
-        setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'pronto', resultado: res, itens } : f))
+        analisadas.push({ fotoId: foto.id, res })
       } catch (e) {
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'erro', erro: e.message } : f))
       }
+    }
+
+    // 2) Agrupamento por tipo: 1 chamada SÓ DE TEXTO para todo o lote.
+    //    Falha ou limite => sem agrupamento (fallback), nunca quebra.
+    const todosNomes = analisadas.flatMap(a => (a.res.itens || []).map(it => it.nome))
+    let mapaBase = {}
+    try {
+      mapaBase = await agruparPorTipo(todosNomes, apiKey)
+    } catch {
+      mapaBase = {}
+    }
+
+    // 3) Monta os itens (vínculo + peso + nomeBase) e marca as fotos como prontas.
+    for (const { fotoId, res } of analisadas) {
+      const itens = (res.itens || []).map(item => construirItem(item, mapaBase))
+      setFila(prev => prev.map(f => f.id === fotoId ? { ...f, status: 'pronto', resultado: res, itens } : f))
     }
     toast.success('Análise concluída! Revise os itens antes de confirmar.')
   }
@@ -206,6 +254,9 @@ export function ImportarFoto() {
     let semPeso = 0
     // Índices lançados com sucesso por foto, para não relançar em nova confirmação.
     const lancadosPorFoto = {}
+    // Produtos novos criados nesta confirmação, por nomeBase, para unir itens
+    // não cadastrados do mesmo tipo num único produto.
+    const criadosPorBase = {}
 
     for (const foto of prontas) {
       lancadosPorFoto[foto.id] = new Set()
@@ -237,16 +288,24 @@ export function ImportarFoto() {
           }
 
           if (vaiCriar) {
-            const { data: novo } = await supabase.from('produtos').insert({
-              organizacao_id: session.organizacaoId,
-              nome: item.nome,
-              categoria: 'Outros',
-              unidade: unidadeAlvo || 'un',
-              quantidade: 0,
-              estoque_minimo: 0,
-            }).select().single()
-            produtoId = novo?.id
-            criados++
+            const baseKey = normalizar(item.nomeBase || item.nome)
+            if (criadosPorBase[baseKey]) {
+              // Já criado nesta confirmação por outro item do mesmo tipo: reaproveita.
+              produtoId = criadosPorBase[baseKey]
+            } else {
+              const nomeNovo = (item.nomeBase || item.nome || '').trim()
+              const { data: novo } = await supabase.from('produtos').insert({
+                organizacao_id: session.organizacaoId,
+                nome: nomeNovo,
+                categoria: 'Outros',
+                unidade: unidadeAlvo || 'un',
+                quantidade: 0,
+                estoque_minimo: 0,
+              }).select().single()
+              produtoId = novo?.id
+              if (produtoId) criadosPorBase[baseKey] = produtoId
+              criados++
+            }
           }
 
           if (foto.resultado.tipo === 'entrada') {
@@ -486,6 +545,23 @@ export function ImportarFoto() {
                                 value={item.marca || ''}
                                 onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)}
                               />
+                            </div>
+                          )}
+                          {!vinculo && foto.resultado.tipo !== 'saida_ficha' && (
+                            <div className="ml-6">
+                              <label className="label">Criar como (itens com o mesmo nome são unidos)</label>
+                              <input
+                                className="input text-sm"
+                                placeholder="Ex: Queijo Mussarela"
+                                value={item.nomeBase || ''}
+                                onChange={e => atualizarItem(foto.id, i, 'nomeBase', e.target.value)}
+                              />
+                              {(() => {
+                                const n = contarNoGrupo(normalizar(item.nomeBase || item.nome))
+                                return n > 1
+                                  ? <p className="text-xs text-blue-600 mt-1">🔗 será unido com {n - 1} outro(s) item(ns) deste tipo</p>
+                                  : <p className="text-xs text-gray-400 mt-1">novo produto</p>
+                              })()}
                             </div>
                           )}
                           {vinculo && <p className="ml-6 text-xs text-green-600">✓ {vinculo.nome}</p>}

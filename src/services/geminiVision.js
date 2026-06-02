@@ -1,5 +1,6 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+const MODEL_TEXTO = 'llama-3.3-70b-versatile'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const prompt = `Voce transcreve documentos de estoque. Sua UNICA tarefa e ler a imagem e copiar fielmente cada linha. Nao interprete, nao compare com nada, nao some. Apenas transcreva o que esta escrito.
@@ -120,6 +121,59 @@ Regras:
   } catch (e) {
     throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200))
   }
+}
+
+// Chamada SÓ DE TEXTO (sem imagem) que agrupa nomes de produtos por tipo,
+// ignorando marca/peso/volume. Roda separada da leitura de visão (não afeta a
+// precisão dela e usa limites de modelo independentes no Groq).
+// Recebe um array de nomes; retorna um mapa { nome: nomeBase }.
+// Em qualquer falha, lança erro — o chamador deve tratar com fallback.
+export async function agruparPorTipo(nomes, apiKey) {
+  const unicos = [...new Set((nomes || []).map(n => (n || '').trim()).filter(Boolean))]
+  if (unicos.length === 0) return {}
+
+  const prompt = `Voce agrupa nomes de produtos de estoque por TIPO, ignorando marca, peso, volume e embalagem.
+Para cada nome da lista, devolva "nomeBase" = o tipo do produto, sem marca, sem peso e sem volume.
+Nomes do MESMO tipo (marcas ou pesos diferentes) devem ter EXATAMENTE o mesmo nomeBase.
+Tipos diferentes ficam distintos (ex: "Queijo Mussarela" e diferente de "Queijo Gorgonzola").
+Use o mesmo idioma e uma capitalizacao natural (ex: "Queijo Mussarela").
+
+Lista:
+${unicos.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+Retorne SOMENTE este JSON, com um item para CADA nome da lista:
+{"itens":[{"nome":"nome exatamente como na lista","nomeBase":"tipo do produto"}]}`
+
+  const body = {
+    model: MODEL_TEXTO,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: 2048,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+  }
+
+  const data = await res.json()
+  const texto = data.choices?.[0]?.message?.content || ''
+  const parsed = JSON.parse(texto)
+  const mapa = {}
+  for (const it of parsed.itens || []) {
+    if (it?.nome && it?.nomeBase) mapa[it.nome.trim()] = it.nomeBase.trim()
+  }
+  return mapa
 }
 
 export function fileToBase64(file) {
