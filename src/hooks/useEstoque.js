@@ -22,13 +22,7 @@ function useTabela(table, queryFn, extraDeps = []) {
       .on('postgres_changes', { event: '*', schema: 'public', table }, buscar)
       .subscribe()
 
-    // Polling como fallback (garante atualização mesmo se WebSocket falhar)
-    const intervalo = setInterval(buscar, 10000)
-
-    return () => {
-      supabase.removeChannel(channel)
-      clearInterval(intervalo)
-    }
+    return () => supabase.removeChannel(channel)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [organizacaoId, ...extraDeps])
 
@@ -74,12 +68,7 @@ export function useLancamentos() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lancamentos' }, buscar)
       .subscribe()
 
-    const intervalo = setInterval(buscar, 10000)
-
-    return () => {
-      supabase.removeChannel(channel)
-      clearInterval(intervalo)
-    }
+    return () => supabase.removeChannel(channel)
   }, [organizacaoId])
 
   return data
@@ -107,12 +96,7 @@ export function useFichaIngredientes(fichaId) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ficha_ingredientes' }, buscar)
       .subscribe()
 
-    const intervalo = setInterval(buscar, 10000)
-
-    return () => {
-      supabase.removeChannel(channel)
-      clearInterval(intervalo)
-    }
+    return () => supabase.removeChannel(channel)
   }, [fichaId, organizacaoId])
 
   return data
