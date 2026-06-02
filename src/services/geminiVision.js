@@ -10,7 +10,7 @@ export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fic
 PASSO 1 — Classifique o documento:
 "entrada" = nota fiscal ou lista de compras | "saida_ficha" = comanda ou pedido | "saida_manual" = descarte | "desconhecido" = outro
 
-PASSO 2 — Liste TODOS os itens da imagem sem excecao, com nome exatamente como esta escrito e quantidade numerica.
+PASSO 2 — Liste TODOS os itens da imagem sem excecao. Para tabelas com quantidades escritas a mao na coluna da direita: cada numero pertence a linha que esta na MESMA altura horizontal que ele, nao a linha acima nem abaixo. Se a celula estiver vazia ou com "O" (letra O), a quantidade e 0.
 
 PASSO 3 — Para cada item, verifique se existe correspondencia na lista abaixo (mesmo produto, marca diferente conta como igual; tipos diferentes NAO contam, ex: "Queijo Mussarela" != "Queijo Gorgonzola"). Se sim, coloque o nome exato do cadastro em nomeCadastrado. Se nao, use null.
 
