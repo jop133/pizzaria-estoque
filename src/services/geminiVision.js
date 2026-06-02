@@ -25,8 +25,10 @@ Retorne SOMENTE este JSON, sem texto adicional:
 Regras IMPORTANTES:
 - Use aspas duplas no JSON
 - quantidade deve ser numero
-- nomeCadastrado: compare o item com a lista de produtos cadastrados acima. Se for o mesmo tipo de produto (ex: "Arroz Tio Joao" = "Arroz"), use o nome EXATO do cadastro. Produtos diferentes (ex: "Queijo Mussarela" e "Queijo Gorgonzola") sao produtos distintos e nao devem ser confundidos. Se nao encontrar correspondencia, use null.
-- marca: se o item tiver uma marca identificavel na imagem (ex: "Tio Joao", "Italac"), preencha aqui. Caso contrario null.
+- Liste TODOS os itens encontrados na imagem, independente de estarem cadastrados ou nao
+- nome: nome completo como aparece na imagem (ex: "Batata Palito Tio Joao 2kg")
+- nomeCadastrado: verifique se o item corresponde a algum produto do estoque acima. Se for o mesmo tipo (ex: "Batata Palito Tio Joao" = "Batata Palito", "Queijo Mussarela Italac" = "Queijo Mussarela"). ATENCAO: tipos diferentes sao produtos distintos (ex: "Queijo Mussarela" != "Queijo Gorgonzola", "Batata Palito" != "Batata Rustica"). Se nao encontrar correspondencia, use null — nao invente correspondencias.
+- marca: extraia apenas a marca do fabricante (ex: "Tio Joao", "Italac", "McCain"). Se nao identificar, use null.
 - confianca: "alta", "media" ou "baixa"
 - observacao pode ser string vazia`
 
