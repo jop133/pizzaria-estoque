@@ -32,9 +32,6 @@ const GRUPOS = [
   { titulo: 'Conta', itens: ['config'] },
 ]
 
-// Atalhos da barra inferior (acesso rápido no polegar)
-const RAPIDOS = ['dashboard', 'estoque', 'foto', 'historico']
-
 function AppInner() {
   const { user, membro, membros, organizacao, loading, trocarOrg, aceitarConvite, logout } = useAuth()
   const [aba, setAba] = useState('dashboard')
@@ -186,29 +183,15 @@ function AppInner() {
         </aside>
       </div>
 
-      {/* Barra inferior — atalhos rápidos */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex shadow-lg z-40 pb-[env(safe-area-inset-bottom)]">
-        {RAPIDOS.map(id => (
-          <button
-            key={id}
-            onClick={() => setAba(id)}
-            className="flex-1 flex flex-col items-center pt-2 pb-1.5 gap-0.5 transition-colors"
-          >
-            <span className={`text-xl leading-none px-4 py-0.5 rounded-full transition-colors ${aba === id ? 'bg-red-50' : ''}`}>
-              {ABAS[id].icon}
-            </span>
-            <span className={`text-[11px] font-medium ${aba === id ? 'text-red-600' : 'text-gray-400'}`}>
-              {ABAS[id].label}
-            </span>
-          </button>
-        ))}
-        {/* Botão "Mais" abre o menu lateral */}
+      {/* Barra inferior — indicador da tela atual (toque abre o menu) */}
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40 pb-[env(safe-area-inset-bottom)]">
         <button
           onClick={() => setMenuAberto(true)}
-          className="flex-1 flex flex-col items-center pt-2 pb-1.5 gap-0.5 text-gray-400"
+          className="w-full flex items-center justify-center gap-2 py-3 text-red-600 active:bg-red-50 transition-colors"
+          aria-label="Abrir menu de navegação"
         >
-          <span className="text-xl leading-none px-4 py-0.5">☰</span>
-          <span className="text-[11px] font-medium">Mais</span>
+          <span className="text-xl leading-none">{ABAS[aba]?.icon}</span>
+          <span className="text-sm font-semibold">{ABAS[aba]?.label}</span>
         </button>
       </nav>
 
