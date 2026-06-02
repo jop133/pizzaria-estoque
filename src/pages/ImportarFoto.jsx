@@ -9,6 +9,7 @@ import toast from 'react-hot-toast'
 
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
 const tipoCor = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', desconhecido: 'gray' }
+const UNIDADES_PESO = ['kg', 'g', 'l', 'ml']
 
 export function ImportarFoto() {
   const produtos = useProdutos()
@@ -74,31 +75,28 @@ export function ImportarFoto() {
     return parcial?.id ?? null
   }
 
-  // Converte contagem de embalagens para a unidade do produto cadastrado.
-  // Usa pesoEmbalagem/unidadeEmbalagem vindos da IA; se faltarem, tenta
-  // extrair do nome do item. Sem peso, mantém a contagem.
-  function calcularQuantidadeFinal(item, count, produtoUnidade) {
-    const u = (produtoUnidade || '').toLowerCase()
-    if (!['kg', 'g', 'l', 'ml'].includes(u)) return count
-
-    let valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
-    let ui = (item.unidadeEmbalagem || '').toLowerCase()
-
-    if (!valor || !['kg', 'g', 'l', 'ml'].includes(ui)) {
-      const match = (item.nome || '').match(/(\d+[.,]?\d*)\s*(kg|g|ml|l)\b/i)
-      if (!match) return count
-      valor = parseFloat(match[1].replace(',', '.'))
-      ui = match[2].toLowerCase()
-    }
-    if (!valor) return count
-
+  // Fator para converter o peso da embalagem na unidade do produto cadastrado.
+  function fatorConversao(produtoU, pesoU) {
     const fatores = {
       'kg|g': 1 / 1000, 'kg|kg': 1, 'g|kg': 1000, 'g|g': 1,
       'l|ml': 1 / 1000, 'l|l': 1, 'ml|l': 1000, 'ml|ml': 1,
     }
-    const fator = fatores[`${u}|${ui}`]
-    if (fator === undefined) return count
-    return Math.round(count * valor * fator * 1000) / 1000
+    return fatores[`${produtoU}|${pesoU}`]
+  }
+
+  // Calcula o total que vai para o estoque a partir de contagem x peso.
+  // Retorna { precisaPeso, total }. precisaPeso=true quando o produto é
+  // por peso/volume mas o peso da embalagem não foi informado.
+  function calcularTotal(item, produtoUnidade) {
+    const u = (produtoUnidade || '').toLowerCase()
+    const count = parseFloat(item.quantidade) || 0
+    if (!UNIDADES_PESO.includes(u)) return { precisaPeso: false, total: count }
+
+    const valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
+    const pu = (item.unidadeEmbalagem || '').toLowerCase()
+    const fator = fatorConversao(u, pu)
+    if (!valor || fator === undefined) return { precisaPeso: true, total: null }
+    return { precisaPeso: false, total: Math.round(count * valor * fator * 1000) / 1000 }
   }
 
   function encontrarFichaId(nomeCadastrado, nome) {
@@ -127,12 +125,24 @@ export function ImportarFoto() {
         const itens = res.itens.map(item => {
           const produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
           const fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
-          let quantidade = item.quantidade
-          if (produtoId && res.tipo === 'entrada') {
-            const prod = produtos.find(p => p.id === produtoId)
-            quantidade = calcularQuantidadeFinal(item, item.quantidade, prod?.unidade)
+          const prod = produtos.find(p => p.id === produtoId)
+          const prodUnidade = (prod?.unidade || '').toLowerCase()
+          // Se o produto é por peso e a IA não trouxe a unidade da embalagem,
+          // assume a própria unidade do produto como padrão para o usuário ajustar.
+          let unidadeEmbalagem = (item.unidadeEmbalagem || '').toLowerCase()
+          if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
+            unidadeEmbalagem = prodUnidade
           }
-          return { ...item, ativo: true, marca: item.marca || '', produtoId, fichaId, quantidade }
+          return {
+            ...item,
+            ativo: true,
+            marca: item.marca || '',
+            produtoId,
+            fichaId,
+            quantidade: item.quantidade ?? 1,
+            pesoEmbalagem: item.pesoEmbalagem ?? '',
+            unidadeEmbalagem,
+          }
         })
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'pronto', resultado: res, itens } : f))
       } catch (e) {
@@ -158,9 +168,15 @@ export function ImportarFoto() {
     let ok = 0
     let criados = 0
     let erros = 0
+    let semPeso = 0
+    // Índices lançados com sucesso por foto, para não relançar em nova confirmação.
+    const lancadosPorFoto = {}
 
     for (const foto of prontas) {
-      for (const item of foto.itens.filter(i => i.ativo)) {
+      lancadosPorFoto[foto.id] = new Set()
+      for (let i = 0; i < foto.itens.length; i++) {
+        const item = foto.itens[i]
+        if (!item.ativo) continue
         try {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
@@ -178,28 +194,54 @@ export function ImportarFoto() {
             criados++
           }
 
+          // Total que vai para o estoque: contagem x peso convertido (produtos
+          // por peso/volume) ou a própria contagem (unidade / fichas).
+          let quantidadeFinal = parseFloat(item.quantidade) || 0
+          if (produtoId && !fichaId) {
+            const prod = produtos.find(p => p.id === produtoId)
+            const prodUnidade = (prod?.unidade || '').toLowerCase()
+            if (UNIDADES_PESO.includes(prodUnidade)) {
+              const { precisaPeso, total } = calcularTotal(item, prodUnidade)
+              if (precisaPeso || !total) { semPeso++; continue }
+              quantidadeFinal = total
+            }
+          }
+
           if (foto.resultado.tipo === 'entrada') {
             if (!produtoId) { erros++; continue }
-            await registrarEntrada(produtoId, item.quantidade, 'Importado por foto', item.marca || '')
+            await registrarEntrada(produtoId, quantidadeFinal, 'Importado por foto', item.marca || '')
           } else if (foto.resultado.tipo === 'saida_ficha') {
-            if (fichaId) await registrarSaidaFicha(fichaId, item.quantidade, 'Importado por foto')
-            else if (produtoId) await registrarSaidaManual(produtoId, item.quantidade, 'Importado por foto')
+            if (fichaId) await registrarSaidaFicha(fichaId, quantidadeFinal, 'Importado por foto')
+            else if (produtoId) await registrarSaidaManual(produtoId, quantidadeFinal, 'Importado por foto')
             else { erros++; continue }
           } else {
             if (!produtoId) { erros++; continue }
-            await registrarSaidaManual(produtoId, item.quantidade, 'Importado por foto')
+            await registrarSaidaManual(produtoId, quantidadeFinal, 'Importado por foto')
           }
           ok++
+          lancadosPorFoto[foto.id].add(i)
         } catch { erros++ }
       }
     }
 
     setConfirmando(false)
+
+    // Remove fotos totalmente lançadas; nas que sobraram itens (ex: sem peso),
+    // desativa os já lançados para não duplicar e mantém o resto para revisão.
+    setFila(prev => prev.flatMap(f => {
+      const lancados = lancadosPorFoto[f.id]
+      if (!lancados) return [f]
+      const itens = f.itens.map((it, i) => lancados.has(i) ? { ...it, ativo: false } : it)
+      const restantes = itens.filter(it => it.ativo)
+      if (restantes.length === 0) return []
+      return [{ ...f, itens }]
+    }))
+
     if (ok > 0) {
       const msg = criados > 0 ? `${ok} item(ns) lançado(s)! ${criados} produto(s) criado(s) automaticamente.` : `${ok} item(ns) lançado(s) no estoque!`
       toast.success(msg)
-      setFila(prev => prev.filter(f => f.status !== 'pronto'))
     }
+    if (semPeso > 0) toast.error(`${semPeso} item(ns) sem peso da embalagem — preencha o peso e confirme novamente`, { duration: 5000 })
     if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados`)
   }
 
@@ -287,8 +329,11 @@ export function ImportarFoto() {
                       const produtoVinculado = produtos.find(p => p.id === item.produtoId)
                       const fichaVinculada = fichas.find(f => f.id === item.fichaId)
                       const vinculo = fichaVinculada || produtoVinculado
+                      const prodUnidade = (produtoVinculado?.unidade || '').toLowerCase()
+                      const usaPeso = !fichaVinculada && produtoVinculado && UNIDADES_PESO.includes(prodUnidade)
+                      const { precisaPeso, total } = usaPeso ? calcularTotal(item, prodUnidade) : { precisaPeso: false, total: null }
                       return (
-                        <div key={i} className={`border rounded-lg p-2 space-y-2 ${item.ativo ? 'border-gray-200' : 'border-gray-100 opacity-50'}`}>
+                        <div key={i} className={`border rounded-lg p-2 space-y-2 ${!item.ativo ? 'border-gray-100 opacity-50' : precisaPeso ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'}`}>
                           <div className="flex items-center gap-2">
                             <input
                               type="checkbox" checked={item.ativo}
@@ -298,6 +343,57 @@ export function ImportarFoto() {
                             <span className="text-sm font-medium text-gray-800 truncate">{item.nome}</span>
                             {!vinculo && <Badge color="red">Sem vínculo</Badge>}
                           </div>
+                          {usaPeso ? (
+                            <div className="ml-6 space-y-2">
+                              <div className="flex items-end gap-1.5 flex-wrap">
+                                <div className="w-16">
+                                  <label className="label">Qtd</label>
+                                  <input
+                                    type="number" min="0" step="1"
+                                    className="input text-sm px-2"
+                                    value={item.quantidade}
+                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                                <span className="pb-2 text-gray-400 text-sm">×</span>
+                                <div className="w-20">
+                                  <label className="label">Peso/un</label>
+                                  <input
+                                    type="number" min="0" step="0.001"
+                                    className="input text-sm px-2"
+                                    placeholder="?"
+                                    value={item.pesoEmbalagem}
+                                    onChange={e => atualizarItem(foto.id, i, 'pesoEmbalagem', e.target.value)}
+                                  />
+                                </div>
+                                <div className="w-16">
+                                  <label className="label">Un</label>
+                                  <select
+                                    className="input text-sm px-1"
+                                    value={item.unidadeEmbalagem}
+                                    onChange={e => atualizarItem(foto.id, i, 'unidadeEmbalagem', e.target.value)}
+                                  >
+                                    {UNIDADES_PESO.map(u => <option key={u} value={u}>{u}</option>)}
+                                  </select>
+                                </div>
+                                <span className="pb-2 text-gray-400 text-sm">=</span>
+                                <div className="pb-2 text-sm font-semibold text-gray-700">
+                                  {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${prodUnidade}`}
+                                </div>
+                              </div>
+                              <div>
+                                <label className="label">Produto</label>
+                                <select
+                                  className="input text-sm"
+                                  value={item.produtoId ?? ''}
+                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
+                                >
+                                  <option value="">-- não vincular --</option>
+                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                                </select>
+                              </div>
+                            </div>
+                          ) : (
                           <div className="grid grid-cols-2 gap-2 ml-6">
                             <div>
                               <label className="label">Quantidade</label>
@@ -337,6 +433,7 @@ export function ImportarFoto() {
                               )}
                             </div>
                           </div>
+                          )}
                           {foto.resultado.tipo === 'entrada' && (
                             <div className="ml-6">
                               <label className="label">Marca (opcional)</label>
