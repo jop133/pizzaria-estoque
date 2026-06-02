@@ -124,8 +124,8 @@ export function Estoque() {
       </div>
 
       {selecionados.size > 0 && (
-        <div className="flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
-          <p className="text-sm font-medium text-rose-700">{selecionados.size} produto(s) selecionado(s)</p>
+        <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-medium text-red-700">{selecionados.size} produto(s) selecionado(s)</p>
           <div className="flex gap-2">
             <button onClick={() => setSelecionados(new Set())} className="text-xs text-gray-500 underline">Limpar</button>
             <button onClick={excluirSelecionados} className="btn-danger text-sm py-1">🗑 Excluir selecionados</button>
@@ -141,7 +141,7 @@ export function Estoque() {
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
               <tr>
                 <th className="px-4 py-3 w-8">
-                  <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-rose-600" />
+                  <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-red-600" />
                 </th>
                 <th className="text-left px-4 py-3">Produto</th>
                 <th className="text-left px-4 py-3 hidden sm:table-cell">Categoria</th>
@@ -155,9 +155,9 @@ export function Estoque() {
               {filtrados.map(p => {
                 const baixo = p.quantidade <= (p.estoque_minimo || 0)
                 return (
-                  <tr key={p.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(p.id) ? 'bg-rose-50' : ''}`}>
+                  <tr key={p.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(p.id) ? 'bg-red-50' : ''}`}>
                     <td className="px-4 py-3">
-                      <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)} className="w-4 h-4 accent-rose-600" />
+                      <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)} className="w-4 h-4 accent-red-600" />
                     </td>
                     <td className="px-4 py-3 font-medium text-gray-800">{p.nome}</td>
                     <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{p.categoria}</td>

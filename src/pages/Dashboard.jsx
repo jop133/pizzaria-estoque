@@ -44,15 +44,15 @@ export function Dashboard() {
       </div>
 
       {abaixoMinimo.length > 0 && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4">
-          <h2 className="text-rose-700 font-semibold mb-3 flex items-center gap-2">
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
+          <h2 className="text-red-700 font-semibold mb-3 flex items-center gap-2">
             <span>⚠️</span> Estoque Baixo — Atenção
           </h2>
           <div className="flex flex-wrap gap-2">
             {abaixoMinimo.map(p => (
-              <div key={p.id} className="bg-white border border-rose-200 rounded-lg px-3 py-2">
+              <div key={p.id} className="bg-white border border-red-200 rounded-lg px-3 py-2">
                 <p className="font-medium text-gray-800 text-sm">{p.nome}</p>
-                <p className="text-xs text-rose-600">
+                <p className="text-xs text-red-600">
                   {p.quantidade} {p.unidade} / mín. {p.estoque_minimo} {p.unidade}
                 </p>
               </div>
@@ -98,7 +98,7 @@ export function Dashboard() {
                   <span className="text-xs">{new Date(l.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                   <button
                     onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Lançamento removido') }}
-                    className="text-gray-300 hover:text-rose-500 transition-colors ml-1"
+                    className="text-gray-300 hover:text-red-500 transition-colors ml-1"
                     title="Excluir lançamento"
                   >✕</button>
                 </div>
@@ -115,7 +115,7 @@ function Card({ label, value, color }) {
   const colors = {
     blue: 'bg-blue-50 border-blue-200 text-blue-700',
     green: 'bg-green-50 border-green-200 text-green-700',
-    red: 'bg-rose-50 border-rose-200 text-rose-700',
+    red: 'bg-red-50 border-red-200 text-red-700',
     orange: 'bg-orange-50 border-orange-200 text-orange-700',
   }
   return (

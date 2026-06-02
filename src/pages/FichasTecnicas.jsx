@@ -146,7 +146,7 @@ export function FichasTecnicas() {
           <div
             key={f.id}
             onClick={() => setDetalhe(f)}
-            className={`bg-white border rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow ${detalhe?.id === f.id ? 'border-rose-400 ring-1 ring-rose-300' : 'border-gray-200'}`}
+            className={`bg-white border rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow ${detalhe?.id === f.id ? 'border-red-400 ring-1 ring-red-300' : 'border-gray-200'}`}
           >
             <div className="flex items-start justify-between">
               <div>
@@ -157,7 +157,7 @@ export function FichasTecnicas() {
             </div>
             <div className="flex gap-2 mt-3">
               <button onClick={e => { e.stopPropagation(); abrirEditar(f) }} className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
-              <button onClick={e => { e.stopPropagation(); excluir(f.id) }} className="text-xs text-rose-500 hover:text-rose-700">Excluir</button>
+              <button onClick={e => { e.stopPropagation(); excluir(f.id) }} className="text-xs text-red-500 hover:text-red-700">Excluir</button>
             </div>
           </div>
         ))}
@@ -273,7 +273,7 @@ function DetalheIngredientes({ ficha }) {
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4">
       <h2 className="font-semibold text-gray-800 mb-4">
-        Ingredientes — <span className="text-rose-600">{ficha.nome}</span>
+        Ingredientes — <span className="text-red-600">{ficha.nome}</span>
       </h2>
 
       <div className="flex gap-2 mb-4 flex-wrap">
@@ -316,7 +316,7 @@ function DetalheIngredientes({ ficha }) {
                     {ing.quantidade} <span className="text-gray-400 text-xs">{prod?.unidade}</span>
                   </td>
                   <td className="px-3 py-2 text-right">
-                    <button onClick={() => remover(ing.id)} className="text-rose-400 hover:text-rose-600 text-xs">Remover</button>
+                    <button onClick={() => remover(ing.id)} className="text-red-400 hover:text-red-600 text-xs">Remover</button>
                   </td>
                 </tr>
               )

@@ -412,11 +412,11 @@ export function ImportarFoto() {
                     {foto.status === 'erro' && <Badge color="red">Erro na análise</Badge>}
                   </div>
                 </div>
-                <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-rose-500 text-lg shrink-0">✕</button>
+                <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
               </div>
 
               {foto.status === 'erro' && (
-                <p className="text-xs text-rose-600 p-3">{foto.erro}</p>
+                <p className="text-xs text-red-600 p-3">{foto.erro}</p>
               )}
 
               {foto.status === 'pronto' && (
@@ -440,7 +440,7 @@ export function ImportarFoto() {
                             <input
                               type="checkbox" checked={item.ativo}
                               onChange={e => atualizarItem(foto.id, i, 'ativo', e.target.checked)}
-                              className="w-4 h-4 accent-rose-600 shrink-0"
+                              className="w-4 h-4 accent-red-600 shrink-0"
                             />
                             <span className="text-sm font-medium text-gray-800 truncate">{item.nome}</span>
                             {!vinculo && <Badge color="red">Sem vínculo</Badge>}

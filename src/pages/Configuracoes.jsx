@@ -132,7 +132,7 @@ export function Configuracoes() {
       <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
         <h2 className="font-semibold text-gray-700">Minha Conta</h2>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-rose-100 rounded-full flex items-center justify-center text-rose-600 font-bold">
+          <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold">
             {(membro?.nome || user?.email || '?')[0].toUpperCase()}
           </div>
           <div>
@@ -148,7 +148,7 @@ export function Configuracoes() {
             🏢 Organização: <strong>{organizacao.nome}</strong>
           </p>
         )}
-        <button onClick={logout} className="w-full text-sm text-rose-600 border border-rose-200 hover:bg-rose-50 rounded-xl py-2 transition-colors font-medium">
+        <button onClick={logout} className="w-full text-sm text-red-600 border border-red-200 hover:bg-red-50 rounded-xl py-2 transition-colors font-medium">
           Sair da conta
         </button>
       </div>
@@ -171,7 +171,7 @@ export function Configuracoes() {
                 ) : (
                   <button
                     onClick={() => trocarOrg(m.organizacao_id)}
-                    className="text-xs text-rose-600 border border-rose-200 hover:bg-rose-50 rounded-lg px-3 py-1 shrink-0"
+                    className="text-xs text-red-600 border border-red-200 hover:bg-red-50 rounded-lg px-3 py-1 shrink-0"
                   >
                     Acessar
                   </button>
@@ -259,7 +259,7 @@ export function Configuracoes() {
                     </select>
                     <button
                       onClick={() => removerMembro(m.id)}
-                      className="text-gray-300 hover:text-rose-500 text-lg ml-1"
+                      className="text-gray-300 hover:text-red-500 text-lg ml-1"
                       title="Remover membro"
                     >✕</button>
                   </div>
@@ -277,8 +277,8 @@ export function Configuracoes() {
 
       {/* Zona de Perigo — só Dono */}
       {isDono && organizacao && (
-        <div className="bg-white border border-rose-200 rounded-xl p-4 space-y-3">
-          <h2 className="font-semibold text-rose-600">⚠️ Zona de Perigo</h2>
+        <div className="bg-white border border-red-200 rounded-xl p-4 space-y-3">
+          <h2 className="font-semibold text-red-600">⚠️ Zona de Perigo</h2>
           <p className="text-xs text-gray-500">
             Excluir a organização <strong>{organizacao.nome}</strong> apaga permanentemente todos os
             produtos, fichas, lançamentos e membros. Esta ação não pode ser desfeita.
@@ -287,13 +287,13 @@ export function Configuracoes() {
           {!confirmandoExclusao ? (
             <button
               onClick={() => setConfirmandoExclusao(true)}
-              className="w-full text-sm text-rose-600 border border-rose-300 hover:bg-rose-50 rounded-xl py-2 font-medium transition-colors"
+              className="w-full text-sm text-red-600 border border-red-300 hover:bg-red-50 rounded-xl py-2 font-medium transition-colors"
             >
               Excluir organização
             </button>
           ) : (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 space-y-3">
-              <p className="text-xs text-rose-700">
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-3">
+              <p className="text-xs text-red-700">
                 Para confirmar, digite o nome exato da organização: <strong>{organizacao.nome}</strong>
               </p>
               <input
@@ -312,7 +312,7 @@ export function Configuracoes() {
                 <button
                   onClick={handleExcluirOrg}
                   disabled={excluindo || nomeConfirmacao.trim() !== organizacao.nome}
-                  className="flex-1 text-sm text-white bg-rose-600 hover:bg-rose-700 rounded-xl py-2 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 text-sm text-white bg-red-600 hover:bg-red-700 rounded-xl py-2 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {excluindo ? 'Excluindo...' : 'Excluir definitivamente'}
                 </button>

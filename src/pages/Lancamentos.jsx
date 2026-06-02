@@ -6,7 +6,7 @@ import toast from 'react-hot-toast'
 
 const TIPOS = [
   { value: 'saida_ficha', label: '🍕 Saída por Ficha (venda)', color: 'bg-orange-50 border-orange-200' },
-  { value: 'saida_manual', label: '📦 Saída Manual (descarte/uso)', color: 'bg-rose-50 border-rose-200' },
+  { value: 'saida_manual', label: '📦 Saída Manual (descarte/uso)', color: 'bg-red-50 border-red-200' },
   { value: 'entrada', label: '✅ Entrada (reposição/compra)', color: 'bg-green-50 border-green-200' },
 ]
 
