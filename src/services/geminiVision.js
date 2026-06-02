@@ -16,7 +16,7 @@ PASSO 3 — Para cada item, verifique se existe correspondencia SEMANTICA na lis
 
 PASSO 4 — Se identificar a marca do fabricante no nome do item, coloque em marca. Caso contrario null.
 
-PASSO 5 — Para a unidade: se o item tiver correspondencia no estoque, use a mesma unidade do cadastro. Se o cadastro diz "un" (unidade), a quantidade e o numero de pecas/frascos/pacotes, nao o peso em gramas.
+PASSO 5 — quantidade = o numero contado na imagem (quantos frascos/pacotes/pecas). NAO converta pesos nem multiplique nada, apenas retorne o numero contado. Mantenha no nome o peso da embalagem se houver (ex: "MEL 780G").
 
 Produtos no estoque:
 ${listaProdutos || '(nenhum)'}

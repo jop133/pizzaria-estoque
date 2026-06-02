@@ -74,6 +74,26 @@ export function ImportarFoto() {
     return parcial?.id ?? null
   }
 
+  // Converte "5 frascos de MEL 780G" para a unidade do produto cadastrado.
+  // Se o produto é em kg/g/l/ml e o nome do item traz o peso da embalagem,
+  // multiplica a contagem pelo peso e converte para a unidade cadastrada.
+  function calcularQuantidadeFinal(nomeItem, count, produtoUnidade) {
+    const u = (produtoUnidade || '').toLowerCase()
+    if (!['kg', 'g', 'l', 'ml'].includes(u)) return count
+    const match = (nomeItem || '').match(/(\d+[.,]?\d*)\s*(kg|g|ml|l)\b/i)
+    if (!match) return count
+    const valor = parseFloat(match[1].replace(',', '.'))
+    if (!valor) return count
+    const ui = match[2].toLowerCase()
+    const fatores = {
+      'kg|g': 1 / 1000, 'kg|kg': 1, 'g|kg': 1000, 'g|g': 1,
+      'l|ml': 1 / 1000, 'l|l': 1, 'ml|l': 1000, 'ml|ml': 1,
+    }
+    const fator = fatores[`${u}|${ui}`]
+    if (fator === undefined) return count
+    return Math.round(count * valor * fator * 1000) / 1000
+  }
+
   function encontrarFichaId(nomeCadastrado, nome) {
     if (nomeCadastrado) {
       const exato = fichas.find(f => f.nome.toLowerCase() === nomeCadastrado.toLowerCase())
@@ -97,13 +117,16 @@ export function ImportarFoto() {
         const base64 = await fileToBase64(foto.file)
         const mimeType = foto.file.type || 'image/jpeg'
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
-        const itens = res.itens.map(item => ({
-          ...item,
-          ativo: true,
-          marca: item.marca || '',
-          produtoId: encontrarProdutoId(item.nomeCadastrado, item.nome),
-          fichaId: encontrarFichaId(item.nomeCadastrado, item.nome),
-        }))
+        const itens = res.itens.map(item => {
+          const produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
+          const fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
+          let quantidade = item.quantidade
+          if (produtoId && res.tipo === 'entrada') {
+            const prod = produtos.find(p => p.id === produtoId)
+            quantidade = calcularQuantidadeFinal(item.nome, item.quantidade, prod?.unidade)
+          }
+          return { ...item, ativo: true, marca: item.marca || '', produtoId, fichaId, quantidade }
+        })
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'pronto', resultado: res, itens } : f))
       } catch (e) {
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'erro', erro: e.message } : f))
