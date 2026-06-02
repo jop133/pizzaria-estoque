@@ -12,9 +12,11 @@ PASSO 1 — Classifique o documento:
 
 PASSO 2 — Liste TODOS os itens da imagem sem excecao. Para tabelas com quantidades escritas a mao na coluna da direita: cada numero pertence a linha que esta na MESMA altura horizontal que ele, nao a linha acima nem abaixo. Se a celula estiver vazia ou com "O" (letra O), a quantidade e 0.
 
-PASSO 3 — Para cada item, verifique se existe correspondencia na lista abaixo (mesmo produto, marca diferente conta como igual; tipos diferentes NAO contam, ex: "Queijo Mussarela" != "Queijo Gorgonzola"). Se sim, coloque o nome exato do cadastro em nomeCadastrado. Se nao, use null.
+PASSO 3 — Para cada item, verifique se existe correspondencia SEMANTICA na lista abaixo. O produto precisa ser o mesmo tipo (ex: "Batata Palito McCain" = "Batata Palito"). NAO faca correspondencia por substring ou coincidencia parcial de letras (ex: "Molho de Pimenta Vermelha" NAO e "Mel" so porque contem as letras m-e-l). Se nao tiver certeza, use null.
 
 PASSO 4 — Se identificar a marca do fabricante no nome do item, coloque em marca. Caso contrario null.
+
+PASSO 5 — Para a unidade: se o item tiver correspondencia no estoque, use a mesma unidade do cadastro. Se o cadastro diz "un" (unidade), a quantidade e o numero de pecas/frascos/pacotes, nao o peso em gramas.
 
 Produtos no estoque:
 ${listaProdutos || '(nenhum)'}

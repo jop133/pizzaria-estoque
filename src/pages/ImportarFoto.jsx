@@ -52,19 +52,37 @@ export function ImportarFoto() {
     setFila(prev => prev.filter(f => f.id !== id))
   }
 
+  // Verifica se todas as palavras do nome cadastrado aparecem como palavras inteiras na busca
+  function matchPorPalavras(nomeCadastrado, busca) {
+    const palavrasBusca = busca.split(/\s+/)
+    const palavrasCadastro = nomeCadastrado.split(/\s+/).filter(p => p.length >= 3)
+    if (palavrasCadastro.length === 0) return false
+    return palavrasCadastro.every(pc => palavrasBusca.some(pb => pb === pc))
+  }
+
   function encontrarProdutoId(nomeCadastrado, nome) {
-    const busca = (nomeCadastrado || nome || '').toLowerCase()
+    // Se a IA indicou nomeCadastrado, usa só correspondência exata
+    if (nomeCadastrado) {
+      const exato = produtos.find(p => p.nome.toLowerCase() === nomeCadastrado.toLowerCase())
+      return exato?.id ?? null
+    }
+    const busca = (nome || '').toLowerCase()
     const exato = produtos.find(p => p.nome.toLowerCase() === busca)
     if (exato) return exato.id
-    const parcial = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
+    // Parcial: só aceita se todas as palavras do produto aparecem como palavras inteiras na busca
+    const parcial = produtos.find(p => matchPorPalavras(p.nome.toLowerCase(), busca))
     return parcial?.id ?? null
   }
 
   function encontrarFichaId(nomeCadastrado, nome) {
-    const busca = (nomeCadastrado || nome || '').toLowerCase()
+    if (nomeCadastrado) {
+      const exato = fichas.find(f => f.nome.toLowerCase() === nomeCadastrado.toLowerCase())
+      return exato?.id ?? null
+    }
+    const busca = (nome || '').toLowerCase()
     const exato = fichas.find(f => f.nome.toLowerCase() === busca)
     if (exato) return exato.id
-    const parcial = fichas.find(f => f.nome.toLowerCase().includes(busca) || busca.includes(f.nome.toLowerCase()))
+    const parcial = fichas.find(f => matchPorPalavras(f.nome.toLowerCase(), busca))
     return parcial?.id ?? null
   }
 
