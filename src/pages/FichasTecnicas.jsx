@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
-import { analisarFichaTecnica, fileToBase64 } from '../services/geminiVision'
+import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -39,8 +39,8 @@ export function FichasTecnicas() {
     if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
     setAnalisando(true)
     try {
-      const base64 = await fileToBase64(fotoAnalise.file)
-      const res = await analisarFichaTecnica(base64, fotoAnalise.file.type || 'image/jpeg', produtos, apiKey)
+      const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
+      const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey)
       setResultadoFoto(res)
     } catch (e) {
       toast.error(e.message || 'Erro ao analisar imagem')

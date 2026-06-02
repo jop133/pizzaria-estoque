@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { registrarSaidaFicha, registrarSaidaManual, registrarEntrada } from '../services/estoque'
-import { analisarImagemEstoque, fileToBase64 } from '../services/geminiVision'
+import { analisarImagemEstoque, prepararImagem } from '../services/geminiVision'
 import toast from 'react-hot-toast'
 
 const TIPOS = [
@@ -32,8 +32,8 @@ export function Lancamentos() {
     setPreviewFoto(URL.createObjectURL(file))
     setAnalisandoFoto(true)
     try {
-      const base64 = await fileToBase64(file)
-      const res = await analisarImagemEstoque(base64, file.type || 'image/jpeg', produtos, fichas, apiKey)
+      const { base64, mimeType } = await prepararImagem(file)
+      const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
 
       // Selecionar tipo baseado no resultado da IA
       if (res.tipo && res.tipo !== 'desconhecido') setTipo(res.tipo)

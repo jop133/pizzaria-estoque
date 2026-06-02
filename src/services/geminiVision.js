@@ -133,3 +133,43 @@ export function fileToBase64(file) {
     reader.readAsDataURL(file)
   })
 }
+
+// Pré-processa a foto antes de enviar à IA: redimensiona (melhora custo de
+// tokens), converte para escala de cinza e aumenta o contraste, deixando o
+// texto mais nítido para a leitura. Retorna { base64, mimeType } JPEG.
+// Em caso de qualquer falha, cai de volta no arquivo original.
+export async function prepararImagem(file, { maxDimensao = 1600, contraste = 45 } = {}) {
+  try {
+    const bitmap = await createImageBitmap(file)
+    let { width, height } = bitmap
+    const escala = Math.min(1, maxDimensao / Math.max(width, height))
+    width = Math.round(width * escala)
+    height = Math.round(height * escala)
+
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    bitmap.close?.()
+
+    const img = ctx.getImageData(0, 0, width, height)
+    const d = img.data
+    const fator = (259 * (contraste + 255)) / (255 * (259 - contraste))
+    for (let i = 0; i < d.length; i += 4) {
+      // luminância (escala de cinza)
+      let v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
+      // contraste
+      v = fator * (v - 128) + 128
+      v = v < 0 ? 0 : v > 255 ? 255 : v
+      d[i] = d[i + 1] = d[i + 2] = v
+    }
+    ctx.putImageData(img, 0, 0)
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+    return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' }
+  } catch {
+    const base64 = await fileToBase64(file)
+    return { base64, mimeType: file.type || 'image/jpeg' }
+  }
+}

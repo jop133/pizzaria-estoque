@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
-import { analisarImagemEstoque, fileToBase64 } from '../services/geminiVision'
+import { analisarImagemEstoque, prepararImagem } from '../services/geminiVision'
 import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../services/estoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
@@ -119,8 +119,7 @@ export function ImportarFoto() {
     for (const foto of pendentes) {
       setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'analisando' } : f))
       try {
-        const base64 = await fileToBase64(foto.file)
-        const mimeType = foto.file.type || 'image/jpeg'
+        const { base64, mimeType } = await prepararImagem(foto.file)
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
         const itens = res.itens.map(item => {
           const produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
