@@ -188,11 +188,12 @@ export function fileToBase64(file) {
   })
 }
 
-// Pré-processa a foto antes de enviar à IA: redimensiona (melhora custo de
-// tokens), converte para escala de cinza e aumenta o contraste, deixando o
-// texto mais nítido para a leitura. Retorna { base64, mimeType } JPEG.
+// Pré-processa a foto antes de enviar à IA: redimensiona, converte para escala
+// de cinza, aumenta o contraste e aplica nitidez (unsharp mask), deixando o
+// texto bem mais crocante para a leitura. Retorna { base64, mimeType } PNG
+// (sem perdas, preserva as bordas das letras).
 // Em caso de qualquer falha, cai de volta no arquivo original.
-export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45 } = {}) {
+export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45, nitidez = 0.8 } = {}) {
   try {
     const bitmap = await createImageBitmap(file)
     let { width, height } = bitmap
@@ -209,19 +210,38 @@ export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45 
 
     const img = ctx.getImageData(0, 0, width, height)
     const d = img.data
+    const n = width * height
+
+    // 1) Escala de cinza + contraste -> buffer separado (para a nitidez ler
+    //    valores originais sem se contaminar com os já escritos).
     const fator = (259 * (contraste + 255)) / (255 * (259 - contraste))
-    for (let i = 0; i < d.length; i += 4) {
-      // luminância (escala de cinza)
+    const gray = new Float32Array(n)
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
       let v = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]
-      // contraste
       v = fator * (v - 128) + 128
-      v = v < 0 ? 0 : v > 255 ? 255 : v
-      d[i] = d[i + 1] = d[i + 2] = v
+      gray[p] = v < 0 ? 0 : v > 255 ? 255 : v
+    }
+
+    // 2) Nitidez (unsharp mask): realça a diferença entre o pixel e a média dos
+    //    vizinhos, deixando as bordas das letras mais definidas.
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const p = y * width + x
+        const c = gray[p]
+        const up = gray[(y > 0 ? y - 1 : 0) * width + x]
+        const down = gray[(y < height - 1 ? y + 1 : height - 1) * width + x]
+        const left = gray[y * width + (x > 0 ? x - 1 : 0)]
+        const right = gray[y * width + (x < width - 1 ? x + 1 : width - 1)]
+        let v = c + nitidez * (c - (up + down + left + right) / 4)
+        v = v < 0 ? 0 : v > 255 ? 255 : v
+        const idx = p * 4
+        d[idx] = d[idx + 1] = d[idx + 2] = v
+      }
     }
     ctx.putImageData(img, 0, 0)
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
-    return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' }
+    const dataUrl = canvas.toDataURL('image/png')
+    return { base64: dataUrl.split(',')[1], mimeType: 'image/png' }
   } catch {
     const base64 = await fileToBase64(file)
     return { base64, mimeType: file.type || 'image/jpeg' }
