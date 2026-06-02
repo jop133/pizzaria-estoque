@@ -9,7 +9,7 @@ Tipo do documento: "entrada" = nota fiscal ou lista de compras | "saida_ficha" =
 
 Para CADA linha do documento, sem pular nenhuma:
 - nome: o texto do item exatamente como escrito (mantenha o peso se estiver no nome, ex: "MEL 780G").
-- quantidade: o numero escrito na linha (frascos/pacotes/unidades). Em tabela manuscrita, o numero da coluna da direita pertence a linha na MESMA altura horizontal. Celula vazia ou "O" = 0. Sem numero visivel = 1.
+- quantidade: o numero de unidades do item. Em nota fiscal/DANFE use SOMENTE a coluna QUANTIDADE (ou QTD/QTDE) — NAO use V.UNITARIO, V.TOTAL, NCM, CST nem ICMS. Em tabela manuscrita, o numero da coluna da direita pertence a linha na MESMA altura horizontal. Celula vazia ou "O" = 0. Sem numero visivel = 1.
 - pesoEmbalagem: se o nome tiver peso/volume (ex: 780G, 200G, 900ML), o NUMERO (ex: 780). Senao null.
 - unidadeEmbalagem: a unidade do peso ("g","kg","ml","l") ou null.
 - marca: a marca do fabricante se aparecer, senao null.
@@ -30,7 +30,7 @@ Retorne SOMENTE este JSON:
         ]
       }
     ],
-    max_tokens: 4096,
+    max_tokens: 8192,
     temperature: 0.1,
     response_format: { type: 'json_object' },
   }
@@ -192,7 +192,7 @@ export function fileToBase64(file) {
 // tokens), converte para escala de cinza e aumenta o contraste, deixando o
 // texto mais nítido para a leitura. Retorna { base64, mimeType } JPEG.
 // Em caso de qualquer falha, cai de volta no arquivo original.
-export async function prepararImagem(file, { maxDimensao = 1600, contraste = 45 } = {}) {
+export async function prepararImagem(file, { maxDimensao = 2200, contraste = 45 } = {}) {
   try {
     const bitmap = await createImageBitmap(file)
     let { width, height } = bitmap
@@ -220,7 +220,7 @@ export async function prepararImagem(file, { maxDimensao = 1600, contraste = 45 
     }
     ctx.putImageData(img, 0, 0)
 
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.9)
     return { base64: dataUrl.split(',')[1], mimeType: 'image/jpeg' }
   } catch {
     const base64 = await fileToBase64(file)
