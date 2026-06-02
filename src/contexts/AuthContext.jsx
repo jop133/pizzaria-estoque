@@ -84,24 +84,17 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // Cria organização para o usuário logado e o torna Dono
+  // Cria organização para o usuário logado e o torna Dono (via RPC segura)
   async function criarOrganizacao(nomeOrg, nomeUsuario) {
-    const { data: { session: s }, error: sessErr } = await supabase.auth.getSession()
-    if (sessErr) throw new Error('Erro de sessão: ' + sessErr.message)
+    const { data: { session: s } } = await supabase.auth.getSession()
     const u = s?.user
-    if (!u) throw new Error('Sessão não encontrada — tente fazer login novamente')
+    if (!u) throw new Error('Sessão não encontrada — faça login novamente')
 
-    const { data: org, error: orgErr } = await supabase
-      .from('organizacoes')
-      .insert({ nome: nomeOrg, dono_id: u.id })
-      .select()
-      .single()
-    if (orgErr) throw new Error('Org: ' + orgErr.message + ' | code: ' + orgErr.code)
-
-    const { error: memErr } = await supabase
-      .from('membros')
-      .insert({ organizacao_id: org.id, user_id: u.id, papel: 'dono', nome: nomeUsuario || u.email, email: u.email })
-    if (memErr) throw new Error('Membro: ' + memErr.message + ' | code: ' + memErr.code)
+    const { error } = await supabase.rpc('criar_organizacao', {
+      nome_org: nomeOrg,
+      nome_usuario: nomeUsuario || u.email,
+    })
+    if (error) throw new Error(error.message)
 
     await carregarPerfil(u.id)
   }
@@ -109,36 +102,28 @@ export function AuthProvider({ children }) {
   async function entrarPorConvite(email, senha, nome, token) {
     bloqueandoRef.current = true
     try {
-      const { data: convite, error: convErr } = await supabase
-        .from('convites')
-        .select('*')
-        .eq('token', token)
-        .eq('usado', false)
-        .gt('expira_em', new Date().toISOString())
-        .single()
-
-      if (convErr || !convite) throw new Error('Convite inválido ou expirado')
-
       let userId
       // Tenta login primeiro; se falhar, cria conta
       const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
       if (loginErr) {
-        const { data: regData, error: regErr } = await supabase.auth.signUp({ email, password: senha })
+        const { error: regErr } = await supabase.auth.signUp({ email, password: senha })
         if (regErr) throw new Error(regErr.message)
-        userId = regData.user?.id
-        if (regData.user) setUser(regData.user)
+        // Garante sessão ativa após cadastro
+        const { data: postLogin, error: postErr } = await supabase.auth.signInWithPassword({ email, password: senha })
+        if (postErr) throw new Error(postErr.message)
+        userId = postLogin.user?.id
+        if (postLogin.user) setUser(postLogin.user)
       } else {
         userId = loginData.user?.id
         if (loginData.user) setUser(loginData.user)
       }
       if (!userId) throw new Error('Erro na autenticação')
 
-      await supabase.from('convites').update({ usado: true }).eq('id', convite.id)
-
-      const { error: memErr } = await supabase
-        .from('membros')
-        .upsert({ organizacao_id: convite.organizacao_id, user_id: userId, papel: 'funcionario', nome, email })
-      if (memErr) throw new Error(memErr.message)
+      const { error } = await supabase.rpc('entrar_por_convite', {
+        convite_token: token,
+        nome_usuario: nome || email,
+      })
+      if (error) throw new Error(error.message)
 
       await carregarPerfil(userId)
     } finally {
