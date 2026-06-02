@@ -52,8 +52,8 @@ export function Historico() {
     toast.success(`${selecionados.size} lançamento(s) excluído(s)!`)
   }
 
-  const tipoBadge = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red' }
-  const tipoLabel = { entrada: '+ Entrada', saida_ficha: '- Ficha', saida_manual: '- Manual' }
+  const tipoBadge = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', ajuste: 'blue' }
+  const tipoLabel = { entrada: '+ Entrada', saida_ficha: '- Ficha', saida_manual: '- Manual', ajuste: '± Ajuste' }
 
   return (
     <div className="space-y-4">
@@ -74,6 +74,7 @@ export function Historico() {
           <option value="entrada">Entradas</option>
           <option value="saida_ficha">Saída por Ficha</option>
           <option value="saida_manual">Saída Manual</option>
+          <option value="ajuste">Ajustes</option>
         </select>
         <select value={periodo} onChange={e => setPeriodo(e.target.value)} className="input w-auto">
           <option value="todos">Todo período</option>
