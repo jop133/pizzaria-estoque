@@ -6,10 +6,35 @@ const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
-  const [membro, setMembro] = useState(null)
-  const [organizacao, setOrganizacao] = useState(null)
+  const [membros, setMembros] = useState([]) // todas as participações do usuário
+  const [orgAtualId, setOrgAtualId] = useState(() => localStorage.getItem('orgAtualId') || null)
   const [loading, setLoading] = useState(true)
   const bloqueandoRef = useRef(false)
+
+  // Participação ativa (organização selecionada)
+  const membro = membros.find(m => m.organizacao_id === orgAtualId) || membros[0] || null
+  const organizacao = membro?.organizacoes || null
+
+  // Mantém o singleton de sessão sincronizado com a org ativa
+  useEffect(() => {
+    session.userId = user?.id ?? null
+    session.organizacaoId = membro?.organizacao_id ?? null
+    session.papel = membro?.papel ?? null
+  }, [user, membro])
+
+  // Garante que orgAtualId aponte para uma org válida
+  useEffect(() => {
+    if (membros.length === 0) return
+    if (!membros.some(m => m.organizacao_id === orgAtualId)) {
+      definirOrg(membros[0].organizacao_id)
+    }
+  }, [membros]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function definirOrg(orgId) {
+    setOrgAtualId(orgId)
+    if (orgId) localStorage.setItem('orgAtualId', orgId)
+    else localStorage.removeItem('orgAtualId')
+  }
 
   async function carregarPerfil(userId) {
     const { data: rows } = await supabase
@@ -17,23 +42,8 @@ export function AuthProvider({ children }) {
       .select('*, organizacoes(*)')
       .eq('user_id', userId)
       .order('criado_em', { ascending: true })
-      .limit(1)
 
-    const data = rows?.[0]
-
-    if (data) {
-      setMembro(data)
-      setOrganizacao(data.organizacoes)
-      session.userId = userId
-      session.organizacaoId = data.organizacao_id
-      session.papel = data.papel
-    } else {
-      setMembro(null)
-      setOrganizacao(null)
-      session.userId = userId
-      session.organizacaoId = null
-      session.papel = null
-    }
+    setMembros(rows || [])
   }
 
   useEffect(() => {
@@ -53,11 +63,8 @@ export function AuthProvider({ children }) {
         carregarPerfil(s.user.id)
       } else {
         setUser(null)
-        setMembro(null)
-        setOrganizacao(null)
-        session.userId = null
-        session.organizacaoId = null
-        session.papel = null
+        setMembros([])
+        definirOrg(null)
       }
     })
 
@@ -77,7 +84,6 @@ export function AuthProvider({ children }) {
       if (error) throw new Error(error.message)
       if (!data.user?.id) throw new Error('Erro ao criar conta')
 
-      // Faz login explícito para garantir sessão ativa
       const { error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
       if (loginErr) throw new Error(loginErr.message)
 
@@ -87,18 +93,19 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // Cria organização para o usuário logado e o torna Dono (via RPC segura)
+  // Cria nova organização e torna o usuário logado Dono (via RPC segura)
   async function criarOrganizacao(nomeOrg, nomeUsuario) {
     const { data: { session: s } } = await supabase.auth.getSession()
     const u = s?.user
     if (!u) throw new Error('Sessão não encontrada — faça login novamente')
 
-    const { error } = await supabase.rpc('criar_organizacao', {
+    const { data: novaOrgId, error } = await supabase.rpc('criar_organizacao', {
       nome_org: nomeOrg,
       nome_usuario: nomeUsuario || u.email,
     })
     if (error) throw new Error(error.message)
 
+    if (novaOrgId) definirOrg(novaOrgId)
     await carregarPerfil(u.id)
   }
 
@@ -121,16 +128,34 @@ export function AuthProvider({ children }) {
       }
       if (!userId) throw new Error('Erro na autenticação')
 
-      const { error } = await supabase.rpc('entrar_por_convite', {
+      const { data: orgId, error } = await supabase.rpc('entrar_por_convite', {
         convite_token: token,
         nome_usuario: nome || email,
       })
       if (error) throw new Error(error.message)
 
+      if (orgId) definirOrg(orgId)
       await carregarPerfil(userId)
     } finally {
       bloqueandoRef.current = false
     }
+  }
+
+  // Aceita convite estando já logado (usado ao abrir link com sessão ativa)
+  async function aceitarConvite(token) {
+    if (!user) throw new Error('Faça login para aceitar o convite')
+    const { data: orgId, error } = await supabase.rpc('entrar_por_convite', {
+      convite_token: token,
+      nome_usuario: membro?.nome || user.email,
+    })
+    if (error) throw new Error(error.message)
+    if (orgId) definirOrg(orgId)
+    await carregarPerfil(user.id)
+    return orgId
+  }
+
+  function trocarOrg(orgId) {
+    definirOrg(orgId)
   }
 
   async function logout() {
@@ -144,6 +169,7 @@ export function AuthProvider({ children }) {
   const value = {
     user,
     membro,
+    membros,
     organizacao,
     loading,
     organizacaoId: membro?.organizacao_id ?? null,
@@ -154,6 +180,8 @@ export function AuthProvider({ children }) {
     registrar,
     criarOrganizacao,
     entrarPorConvite,
+    aceitarConvite,
+    trocarOrg,
     logout,
     recarregarPerfil,
   }

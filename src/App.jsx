@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Toaster } from 'react-hot-toast'
+import toast from 'react-hot-toast'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Login } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
@@ -24,9 +25,21 @@ const ABAS = [
 ]
 
 function AppInner() {
-  const { user, membro, loading } = useAuth()
+  const { user, membro, membros, organizacao, loading, trocarOrg, aceitarConvite } = useAuth()
   const [aba, setAba] = useState('dashboard')
   const abaixoMinimo = useProdutosAbaixoMinimo()
+
+  // Aceitar convite quando o usuário já está logado
+  useEffect(() => {
+    if (!user || !membro) return
+    const params = new URLSearchParams(window.location.search)
+    const token = params.get('convite')
+    if (!token) return
+    aceitarConvite(token)
+      .then(() => toast.success('Você entrou na nova organização!'))
+      .catch(err => toast.error(err.message))
+      .finally(() => window.history.replaceState({}, '', window.location.pathname))
+  }, [user, membro]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (loading) {
     return (
@@ -61,7 +74,21 @@ function AppInner() {
         <span className="text-2xl">🍕</span>
         <div>
           <h1 className="font-bold text-lg leading-tight">Pizzaria Estoque</h1>
-          <p className="text-red-200 text-xs">Controle de estoque</p>
+          {membros.length > 1 ? (
+            <select
+              value={membro?.organizacao_id || ''}
+              onChange={e => trocarOrg(e.target.value)}
+              className="bg-red-700 text-white text-xs rounded px-1 py-0.5 mt-0.5 max-w-[160px] focus:outline-none"
+            >
+              {membros.map(m => (
+                <option key={m.organizacao_id} value={m.organizacao_id}>
+                  {m.organizacoes?.nome || 'Organização'}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-red-200 text-xs">{organizacao?.nome || 'Controle de estoque'}</p>
+          )}
         </div>
         {abaixoMinimo.length > 0 && (
           <button

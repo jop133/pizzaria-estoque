@@ -8,11 +8,13 @@ const PAPEL_COR = { dono: 'red', admin: 'orange', funcionario: 'gray' }
 const PAPEL_LABEL = { dono: '👑 Dono', admin: '⭐ Admin', funcionario: '👤 Funcionário' }
 
 export function Configuracoes() {
-  const { user, membro, organizacao, papel, isDono, logout, recarregarPerfil } = useAuth()
+  const { user, membro, membros: minhasOrgs, organizacao, papel, isDono, trocarOrg, criarOrganizacao, logout, recarregarPerfil } = useAuth()
   const [membros, setMembros] = useState([])
   const [linkConvite, setLinkConvite] = useState('')
   const [gerandoLink, setGerandoLink] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [novaOrg, setNovaOrg] = useState('')
+  const [criandoOrg, setCriandoOrg] = useState(false)
 
   useEffect(() => {
     carregarMembros()
@@ -51,6 +53,20 @@ export function Configuracoes() {
       toast.error(e.message)
     } finally {
       setGerandoLink(false)
+    }
+  }
+
+  async function handleCriarOrg() {
+    if (!novaOrg.trim()) return toast.error('Informe o nome da organização')
+    setCriandoOrg(true)
+    try {
+      await criarOrganizacao(novaOrg.trim(), membro?.nome || user?.email)
+      toast.success('Organização criada!')
+      setNovaOrg('')
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setCriandoOrg(false)
     }
   }
 
@@ -115,6 +131,49 @@ export function Configuracoes() {
         <button onClick={logout} className="w-full text-sm text-red-600 border border-red-200 hover:bg-red-50 rounded-xl py-2 transition-colors font-medium">
           Sair da conta
         </button>
+      </div>
+
+      {/* Minhas Organizações */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+        <h2 className="font-semibold text-gray-700">Minhas Organizações</h2>
+        <div className="space-y-2">
+          {minhasOrgs.map(m => {
+            const ativa = m.organizacao_id === membro?.organizacao_id
+            return (
+              <div key={m.organizacao_id} className="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0">
+                <span className="text-lg">🏢</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{m.organizacoes?.nome || 'Organização'}</p>
+                  <p className="text-xs text-gray-400">{PAPEL_LABEL[m.papel]}</p>
+                </div>
+                {ativa ? (
+                  <span className="text-xs text-green-600 font-medium shrink-0">● Ativa</span>
+                ) : (
+                  <button
+                    onClick={() => trocarOrg(m.organizacao_id)}
+                    className="text-xs text-red-600 border border-red-200 hover:bg-red-50 rounded-lg px-3 py-1 shrink-0"
+                  >
+                    Acessar
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+        <div className="pt-2 border-t border-gray-100 space-y-2">
+          <p className="text-xs text-gray-500">Criar uma nova organização (você será o Dono):</p>
+          <div className="flex gap-2">
+            <input
+              className="input flex-1"
+              placeholder="Nome da nova organização"
+              value={novaOrg}
+              onChange={e => setNovaOrg(e.target.value)}
+            />
+            <button onClick={handleCriarOrg} disabled={criandoOrg} className="btn-primary shrink-0 disabled:opacity-50">
+              {criandoOrg ? '...' : 'Criar'}
+            </button>
+          </div>
+        </div>
       </div>
 
       {/* Convite — só Dono */}
