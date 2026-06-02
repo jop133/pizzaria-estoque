@@ -5,32 +5,25 @@ export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fic
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
   const listaFichas = fichas.map(f => `- ${f.nome}`).join('\n')
 
-  const prompt = `Analise a imagem e retorne um JSON com os itens identificados.
+  const prompt = `Voce e um leitor de documentos de estoque. Leia a imagem com atencao e extraia TODOS os itens e quantidades visiveis.
 
-Tipo do documento:
-- nota fiscal ou recibo de compra = "entrada"
-- comanda ou pedido de vendas = "saida_ficha"
-- descarte ou uso interno = "saida_manual"
-- outro = "desconhecido"
+PASSO 1 — Classifique o documento:
+"entrada" = nota fiscal ou lista de compras | "saida_ficha" = comanda ou pedido | "saida_manual" = descarte | "desconhecido" = outro
 
-Produtos cadastrados no estoque:
+PASSO 2 — Liste TODOS os itens da imagem sem excecao, com nome exatamente como esta escrito e quantidade numerica.
+
+PASSO 3 — Para cada item, verifique se existe correspondencia na lista abaixo (mesmo produto, marca diferente conta como igual; tipos diferentes NAO contam, ex: "Queijo Mussarela" != "Queijo Gorgonzola"). Se sim, coloque o nome exato do cadastro em nomeCadastrado. Se nao, use null.
+
+PASSO 4 — Se identificar a marca do fabricante no nome do item, coloque em marca. Caso contrario null.
+
+Produtos no estoque:
 ${listaProdutos || '(nenhum)'}
 
 Fichas tecnicas:
 ${listaFichas || '(nenhuma)'}
 
-Retorne SOMENTE este JSON, sem texto adicional:
-{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome original na imagem","quantidade":1,"unidade":"kg","nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}
-
-Regras IMPORTANTES:
-- Use aspas duplas no JSON
-- quantidade deve ser numero
-- Liste TODOS os itens encontrados na imagem, independente de estarem cadastrados ou nao
-- nome: nome completo como aparece na imagem (ex: "Batata Palito Tio Joao 2kg")
-- nomeCadastrado: verifique se o item corresponde a algum produto do estoque acima. Se for o mesmo tipo (ex: "Batata Palito Tio Joao" = "Batata Palito", "Queijo Mussarela Italac" = "Queijo Mussarela"). ATENCAO: tipos diferentes sao produtos distintos (ex: "Queijo Mussarela" != "Queijo Gorgonzola", "Batata Palito" != "Batata Rustica"). Se nao encontrar correspondencia, use null — nao invente correspondencias.
-- marca: extraia apenas a marca do fabricante (ex: "Tio Joao", "Italac", "McCain"). Se nao identificar, use null.
-- confianca: "alta", "media" ou "baixa"
-- observacao pode ser string vazia`
+Retorne SOMENTE este JSON:
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome como na imagem","quantidade":1,"unidade":"un","nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}`
 
   const body = {
     model: MODEL,
