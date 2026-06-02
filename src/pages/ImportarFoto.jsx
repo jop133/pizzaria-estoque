@@ -74,17 +74,24 @@ export function ImportarFoto() {
     return parcial?.id ?? null
   }
 
-  // Converte "5 frascos de MEL 780G" para a unidade do produto cadastrado.
-  // Se o produto é em kg/g/l/ml e o nome do item traz o peso da embalagem,
-  // multiplica a contagem pelo peso e converte para a unidade cadastrada.
-  function calcularQuantidadeFinal(nomeItem, count, produtoUnidade) {
+  // Converte contagem de embalagens para a unidade do produto cadastrado.
+  // Usa pesoEmbalagem/unidadeEmbalagem vindos da IA; se faltarem, tenta
+  // extrair do nome do item. Sem peso, mantém a contagem.
+  function calcularQuantidadeFinal(item, count, produtoUnidade) {
     const u = (produtoUnidade || '').toLowerCase()
     if (!['kg', 'g', 'l', 'ml'].includes(u)) return count
-    const match = (nomeItem || '').match(/(\d+[.,]?\d*)\s*(kg|g|ml|l)\b/i)
-    if (!match) return count
-    const valor = parseFloat(match[1].replace(',', '.'))
+
+    let valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
+    let ui = (item.unidadeEmbalagem || '').toLowerCase()
+
+    if (!valor || !['kg', 'g', 'l', 'ml'].includes(ui)) {
+      const match = (item.nome || '').match(/(\d+[.,]?\d*)\s*(kg|g|ml|l)\b/i)
+      if (!match) return count
+      valor = parseFloat(match[1].replace(',', '.'))
+      ui = match[2].toLowerCase()
+    }
     if (!valor) return count
-    const ui = match[2].toLowerCase()
+
     const fatores = {
       'kg|g': 1 / 1000, 'kg|kg': 1, 'g|kg': 1000, 'g|g': 1,
       'l|ml': 1 / 1000, 'l|l': 1, 'ml|l': 1000, 'ml|ml': 1,
@@ -123,7 +130,7 @@ export function ImportarFoto() {
           let quantidade = item.quantidade
           if (produtoId && res.tipo === 'entrada') {
             const prod = produtos.find(p => p.id === produtoId)
-            quantidade = calcularQuantidadeFinal(item.nome, item.quantidade, prod?.unidade)
+            quantidade = calcularQuantidadeFinal(item, item.quantidade, prod?.unidade)
           }
           return { ...item, ativo: true, marca: item.marca || '', produtoId, fichaId, quantidade }
         })

@@ -16,7 +16,9 @@ PASSO 3 — Para cada item, verifique se existe correspondencia SEMANTICA na lis
 
 PASSO 4 — Se identificar a marca do fabricante no nome do item, coloque em marca. Caso contrario null.
 
-PASSO 5 — quantidade = o numero contado na imagem (quantos frascos/pacotes/pecas). NAO converta pesos nem multiplique nada, apenas retorne o numero contado. Mantenha no nome o peso da embalagem se houver (ex: "MEL 780G").
+PASSO 5 — quantidade = o numero de unidades contadas na imagem (quantos frascos/pacotes/pecas). NAO converta nada, NAO multiplique nada, apenas o numero contado. Se NAO houver contagem visivel, use 1.
+
+PASSO 6 — Se o nome do item tiver o peso/volume da embalagem (ex: "MEL 780G", "MILHO 200G", "OLEO 900ML"), preencha pesoEmbalagem com o NUMERO (ex: 780) e unidadeEmbalagem com a unidade ("g", "kg", "ml" ou "l"). Se nao houver peso visivel, pesoEmbalagem=null e unidadeEmbalagem=null. NUNCA some pesos, cada embalagem mantem seu proprio peso unitario.
 
 Produtos no estoque:
 ${listaProdutos || '(nenhum)'}
@@ -25,7 +27,7 @@ Fichas tecnicas:
 ${listaFichas || '(nenhuma)'}
 
 Retorne SOMENTE este JSON:
-{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome como na imagem","quantidade":1,"unidade":"un","nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}`
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome como na imagem","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}`
 
   const body = {
     model: MODEL,
