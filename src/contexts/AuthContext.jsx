@@ -82,9 +82,11 @@ export function AuthProvider({ children }) {
   }
 
   // Cria organização para o usuário logado e o torna Dono
-  async function criarOrganizacao(nomeOrg) {
-    const { data: { user: u } } = await supabase.auth.getUser()
-    if (!u) throw new Error('Não autenticado')
+  async function criarOrganizacao(nomeOrg, nomeUsuario) {
+    // Usa o user do estado React — mais confiável que getUser() logo após signup
+    const { data: { session: s } } = await supabase.auth.getSession()
+    const u = s?.user
+    if (!u) throw new Error('Sessão não encontrada. Faça login novamente.')
 
     const { data: org, error: orgErr } = await supabase
       .from('organizacoes')
@@ -95,7 +97,7 @@ export function AuthProvider({ children }) {
 
     const { error: memErr } = await supabase
       .from('membros')
-      .insert({ organizacao_id: org.id, user_id: u.id, papel: 'dono', nome: u.email, email: u.email })
+      .insert({ organizacao_id: org.id, user_id: u.id, papel: 'dono', nome: nomeUsuario || u.email, email: u.email })
     if (memErr) throw new Error('Erro ao criar membro: ' + memErr.message)
 
     await carregarPerfil(u.id)

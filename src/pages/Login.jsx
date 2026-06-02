@@ -62,7 +62,7 @@ export function Login() {
     if (!nomeOrg.trim()) return toast.error('Informe o nome da organização')
     setLoading(true)
     try {
-      await criarOrganizacao(nomeOrg.trim())
+      await criarOrganizacao(nomeOrg.trim(), nome.trim())
       toast.success('Organização criada! Bem-vindo!')
     } catch (err) {
       toast.error(err.message)
