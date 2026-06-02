@@ -10,6 +10,13 @@ import toast from 'react-hot-toast'
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
 const tipoCor = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', desconhecido: 'gray' }
 const UNIDADES_PESO = ['kg', 'g', 'l', 'ml']
+// Unidades oferecidas ao criar um produto novo (contagem + peso direto)
+const UNIDADES_NOVO = ['un', 'pct', 'cx', 'dz', 'fardo', 'saco', 'lata', 'bandeja', 'kg', 'g', 'l', 'ml']
+const ROTULO_UNIDADE = {
+  un: 'Unidade (un)', pct: 'Pacote (pct)', cx: 'Caixa (cx)', dz: 'Dúzia (dz)',
+  fardo: 'Fardo', saco: 'Saco', lata: 'Lata', bandeja: 'Bandeja',
+  kg: 'Quilo (kg)', g: 'Grama (g)', l: 'Litro (l)', ml: 'Mililitro (ml)',
+}
 
 export function ImportarFoto() {
   const produtos = useProdutos()
@@ -128,19 +135,31 @@ export function ImportarFoto() {
     return (item.unidade || 'un').toLowerCase()
   }
 
-  // Calcula o total que vai para o estoque a partir de contagem x peso.
-  // Retorna { precisaPeso, total }. precisaPeso=true quando o produto é
-  // por peso/volume mas o peso da embalagem não foi informado.
-  function calcularTotal(item, produtoUnidade) {
-    const u = (produtoUnidade || '').toLowerCase()
+  // Decide como contabilizar o item e retorna { converter, precisaPeso, total }.
+  // - converter=true  -> é embalagem de um produto por peso (contagem × peso).
+  //   precisaPeso=true quando falta o peso da embalagem (bloqueia até informar).
+  // - converter=false -> quantidade entra direto na unidade (peso direto tipo
+  //   "filé 5,466 kg", ou contagem simples como un/pct/cx).
+  function calcular(item, unidadeAlvo) {
+    const u = (unidadeAlvo || '').toLowerCase()
     const count = parseFloat(item.quantidade) || 0
-    if (!UNIDADES_PESO.includes(u)) return { precisaPeso: false, total: count }
 
-    const valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
-    const pu = (item.unidadeEmbalagem || '').toLowerCase()
-    const fator = fatorConversao(u, pu)
-    if (!valor || fator === undefined) return { precisaPeso: true, total: null }
-    return { precisaPeso: false, total: Math.round(count * valor * fator * 1000) / 1000 }
+    if (UNIDADES_PESO.includes(u)) {
+      if (temPeso(item)) {
+        const valor = parseFloat(String(item.pesoEmbalagem ?? '').replace(',', '.'))
+        const fator = fatorConversao(u, (item.unidadeEmbalagem || '').toLowerCase())
+        if (valor && fator !== undefined) return { converter: true, precisaPeso: false, total: Math.round(count * valor * fator * 1000) / 1000 }
+        return { converter: true, precisaPeso: true, total: null }
+      }
+      // Unidade-alvo é peso, mas sem peso de embalagem:
+      // se o item já está em unidade de peso, a quantidade é o próprio peso (direto).
+      if (UNIDADES_PESO.includes((item.unidade || '').toLowerCase())) {
+        return { converter: false, precisaPeso: false, total: count }
+      }
+      // Item contado em embalagens de um produto por peso, mas peso não lido.
+      return { converter: true, precisaPeso: true, total: null }
+    }
+    return { converter: false, precisaPeso: false, total: count }
   }
 
   function encontrarFichaId(nomeCadastrado, nome) {
@@ -186,6 +205,10 @@ export function ImportarFoto() {
     if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
       unidadeEmbalagem = prodUnidade
     }
+    // Normaliza a unidade do item para uma das opções conhecidas (códigos de
+    // nota tipo "UNI", "PT" viram "un"); peso direto como "kg" é preservado.
+    let unidade = (item.unidade || 'un').toLowerCase()
+    if (!UNIDADES_NOVO.includes(unidade)) unidade = 'un'
     return {
       ...item,
       ativo: true,
@@ -195,6 +218,7 @@ export function ImportarFoto() {
       quantidade: item.quantidade ?? 1,
       pesoEmbalagem,
       unidadeEmbalagem,
+      unidade,
       nomeBase,
     }
   }
@@ -277,13 +301,13 @@ export function ImportarFoto() {
             unidadeAlvo = unidadeAlvoDoItem(item, null)
           }
 
-          // Total que vai para o estoque: contagem x peso convertido (unidades
-          // de peso/volume) ou a própria contagem. Calculado antes de criar para
-          // não gerar produto quando o peso ainda falta.
+          // Total que vai para o estoque: embalagem×peso (quando aplicável) ou a
+          // própria quantidade. Calculado antes de criar para não gerar produto
+          // quando o peso da embalagem ainda falta.
           let quantidadeFinal = parseFloat(item.quantidade) || 0
-          if (!fichaId && UNIDADES_PESO.includes(unidadeAlvo)) {
-            const { precisaPeso, total } = calcularTotal(item, unidadeAlvo)
-            if (precisaPeso || !total) { semPeso++; continue }
+          if (!fichaId) {
+            const { converter, precisaPeso, total } = calcular(item, unidadeAlvo)
+            if (converter && (precisaPeso || !total)) { semPeso++; continue }
             quantidadeFinal = total
           }
 
@@ -432,8 +456,13 @@ export function ImportarFoto() {
                       const vinculo = fichaVinculada || produtoVinculado
                       // Unidade-alvo: do produto vinculado, ou (produto novo) a base do peso lido.
                       const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
-                      const usaPeso = !fichaVinculada && foto.resultado.tipo !== 'saida_ficha' && UNIDADES_PESO.includes(unidadeAlvo)
-                      const { precisaPeso, total } = usaPeso ? calcularTotal(item, unidadeAlvo) : { precisaPeso: false, total: null }
+                      const ehNovoNaoFicha = !vinculo && foto.resultado.tipo !== 'saida_ficha'
+                      const r = (!fichaVinculada && foto.resultado.tipo !== 'saida_ficha')
+                        ? calcular(item, unidadeAlvo)
+                        : { converter: false, precisaPeso: false, total: null }
+                      const usaPeso = r.converter
+                      const precisaPeso = r.precisaPeso
+                      const total = r.total
                       return (
                         <div key={i} className={`border rounded-lg p-2 space-y-2 ${!item.ativo ? 'border-gray-100 opacity-50' : precisaPeso ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'}`}>
                           <div className="flex items-center gap-2">
@@ -491,6 +520,41 @@ export function ImportarFoto() {
                                   onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
                                 >
                                   <option value="">-- não vincular --</option>
+                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+                                </select>
+                              </div>
+                            </div>
+                          ) : ehNovoNaoFicha ? (
+                            <div className="ml-6 space-y-2">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="label">Quantidade</label>
+                                  <input
+                                    type="number" min="0.001" step="0.001"
+                                    className="input text-sm"
+                                    value={item.quantidade}
+                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="label">Unidade</label>
+                                  <select
+                                    className="input text-sm"
+                                    value={item.unidade}
+                                    onChange={e => atualizarItem(foto.id, i, 'unidade', e.target.value)}
+                                  >
+                                    {UNIDADES_NOVO.map(u => <option key={u} value={u}>{ROTULO_UNIDADE[u] || u}</option>)}
+                                  </select>
+                                </div>
+                              </div>
+                              <div>
+                                <label className="label">Vincular a produto existente (opcional)</label>
+                                <select
+                                  className="input text-sm"
+                                  value={item.produtoId ?? ''}
+                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
+                                >
+                                  <option value="">-- criar novo produto --</option>
                                   {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
                                 </select>
                               </div>

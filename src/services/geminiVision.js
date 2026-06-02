@@ -10,11 +10,12 @@ Tipo do documento: "entrada" = nota fiscal ou lista de compras | "saida_ficha" =
 Para CADA linha do documento, sem pular nenhuma:
 - nome: o texto do item exatamente como escrito (mantenha o peso se estiver no nome, ex: "MEL 780G").
 - quantidade: o numero de unidades do item. Em nota fiscal/DANFE use SOMENTE a coluna QUANTIDADE (ou QTD/QTDE) — NAO use V.UNITARIO, V.TOTAL, NCM, CST nem ICMS. Em tabela manuscrita, o numero da coluna da direita pertence a linha na MESMA altura horizontal. Celula vazia ou "O" = 0. Sem numero visivel = 1.
-- pesoEmbalagem: se o nome tiver peso/volume (ex: 780G, 200G, 900ML), o NUMERO (ex: 780). Senao null.
-- unidadeEmbalagem: a unidade do peso ("g","kg","ml","l") ou null.
+- unidade: a unidade/medida do item como aparece (ex: un, pct, cx, dz, kg, g, l, ml). Se for vendido por peso direto (ex: carne 5,466 KG), use a unidade de peso (kg/g/l/ml) e a quantidade e o proprio peso. Se nao houver, "un".
+- pesoEmbalagem: SOMENTE se o NOME do item tiver o peso/volume da embalagem (ex: "MEL 780G", "OLEO 900ML"), o NUMERO (ex: 780). Se o peso for a quantidade comprada (coluna), deixe null.
+- unidadeEmbalagem: a unidade do peso da embalagem ("g","kg","ml","l") ou null.
 - marca: a marca do fabricante se aparecer, senao null.
 
-Regras: copie TODAS as linhas. Nao converta nem multiplique pesos. Cada linha e um item separado, mesmo que o nome se repita.
+Regras: leia TODAS as linhas, sem pular nenhuma e sem inventar itens que nao existem. Nao converta nem multiplique pesos. Cada linha e um item separado, mesmo que o nome se repita.
 
 Retorne SOMENTE este JSON:
 {"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
