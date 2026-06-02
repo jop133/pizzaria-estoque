@@ -56,7 +56,7 @@ function AppInner() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-red-600 flex items-center justify-center">
+      <div className="min-h-screen bg-rose-800 flex items-center justify-center">
         <div className="text-center text-white space-y-3">
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white shadow-lg overflow-hidden animate-pulse">
             <img src="/logo.png" alt="" className="w-16 h-16 object-contain" />
@@ -91,10 +91,10 @@ function AppInner() {
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
       {/* Cabeçalho */}
-      <header className="bg-red-600 text-white px-3 py-3 flex items-center gap-2 shadow-md sticky top-0 z-30">
+      <header className="bg-rose-800 text-white px-3 py-3 flex items-center gap-2 shadow-md sticky top-0 z-30">
         <button
           onClick={() => setMenuAberto(true)}
-          className="p-2 -ml-1 rounded-lg hover:bg-red-500 active:bg-red-700 transition-colors"
+          className="p-2 -ml-1 rounded-lg hover:bg-rose-700 active:bg-rose-900 transition-colors"
           aria-label="Abrir menu"
         >
           <Menu className="w-6 h-6" />
@@ -102,12 +102,12 @@ function AppInner() {
         <img src="/logo.png" alt="" className="w-9 h-9 rounded-md bg-white object-contain p-0.5 shrink-0" />
         <div className="min-w-0">
           <h1 className="font-bold text-base leading-tight truncate">{ABAS[aba]?.label || 'Pizzaria Estoque'}</h1>
-          <p className="text-red-200 text-xs truncate">{organizacao?.nome || 'Controle de estoque'}</p>
+          <p className="text-rose-200 text-xs truncate">{organizacao?.nome || 'Controle de estoque'}</p>
         </div>
         {abaixoMinimo.length > 0 && (
           <button
             onClick={() => setAba('estoque')}
-            className="ml-auto flex items-center gap-1 bg-red-500 hover:bg-red-400 text-white text-xs font-bold px-3 py-1.5 rounded-full animate-pulse shrink-0"
+            className="ml-auto flex items-center gap-1 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold px-3 py-1.5 rounded-full animate-pulse shrink-0"
           >
             <AlertTriangle className="w-3.5 h-3.5" /> {abaixoMinimo.length}
           </button>
@@ -129,16 +129,15 @@ function AppInner() {
           className={`absolute left-0 top-0 h-full w-72 max-w-[82vw] bg-white shadow-2xl flex flex-col transition-transform duration-200 ${menuAberto ? 'translate-x-0' : '-translate-x-full'}`}
         >
           {/* Topo do menu */}
-          <div className="bg-red-600 text-white p-4">
-            <div className="flex items-center gap-2">
-              <img src="/logo.png" alt="" className="w-10 h-10 rounded-md bg-white object-contain p-0.5" />
-              <span className="font-bold text-lg">Pier Pizza</span>
+          <div className="bg-rose-800 text-white p-4">
+            <div className="flex items-center">
+              <img src="/logo.png" alt="Pier Pizza & Cantina" className="w-12 h-12 rounded-md bg-white object-contain p-0.5" />
             </div>
             {membros.length > 1 ? (
               <select
                 value={membro?.organizacao_id || ''}
                 onChange={e => trocarOrg(e.target.value)}
-                className="mt-3 w-full bg-red-700 text-white text-sm rounded-lg px-2 py-1.5 focus:outline-none"
+                className="mt-3 w-full bg-rose-700 text-white text-sm rounded-lg px-2 py-1.5 focus:outline-none"
               >
                 {membros.map(m => (
                   <option key={m.organizacao_id} value={m.organizacao_id}>
@@ -147,7 +146,7 @@ function AppInner() {
                 ))}
               </select>
             ) : (
-              <p className="text-red-200 text-sm mt-1 truncate">{organizacao?.nome}</p>
+              <p className="text-rose-200 text-sm mt-1 truncate">{organizacao?.nome}</p>
             )}
           </div>
 
@@ -164,7 +163,7 @@ function AppInner() {
                       onClick={() => irPara(id)}
                       className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
                         aba === id
-                          ? 'bg-red-50 text-red-700 font-semibold border-r-4 border-red-600'
+                          ? 'bg-rose-50 text-rose-700 font-semibold border-r-4 border-rose-600'
                           : 'text-gray-700 hover:bg-gray-50'
                       }`}
                     >
@@ -194,7 +193,7 @@ function AppInner() {
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-lg z-40 pb-[env(safe-area-inset-bottom)]">
         <button
           onClick={() => setMenuAberto(true)}
-          className="w-full flex items-center justify-center gap-2 py-3 text-red-600 active:bg-red-50 transition-colors"
+          className="w-full flex items-center justify-center gap-2 py-3 text-rose-800 active:bg-rose-50 transition-colors"
           aria-label="Abrir menu de navegação"
         >
           {(() => { const Icon = ABAS[aba]?.Icon; return Icon ? <Icon className="w-5 h-5" /> : null })()}

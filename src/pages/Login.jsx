@@ -118,7 +118,7 @@ export function Login() {
         className="absolute inset-0 bg-cover bg-center"
         style={{ backgroundImage: 'url(/login-bg.webp)' }}
       />
-      <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/55 to-red-950/85" />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/55 to-rose-950/85" />
 
       <div className="relative w-full max-w-sm">
         <div className="text-center mb-6">
@@ -126,7 +126,7 @@ export function Login() {
             <img src="/logo.png" alt="Pier Pizza & Cantina" className="w-20 h-20 object-contain" />
           </div>
           <h1 className="text-white text-2xl font-bold mt-3 drop-shadow-lg">Pier Pizza &amp; Cantina</h1>
-          <p className="text-red-100 text-sm mt-1 drop-shadow">Controle de Estoque</p>
+          <p className="text-rose-100 text-sm mt-1 drop-shadow">Controle de Estoque</p>
         </div>
 
         <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-6 space-y-5">

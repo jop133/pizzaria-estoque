@@ -84,8 +84,8 @@ export function Historico() {
       </div>
 
       {selecionados.size > 0 && (
-        <div className="flex items-center justify-between bg-red-50 border border-red-200 rounded-xl px-4 py-3">
-          <p className="text-sm font-medium text-red-700">{selecionados.size} lançamento(s) selecionado(s)</p>
+        <div className="flex items-center justify-between bg-rose-50 border border-rose-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-medium text-rose-700">{selecionados.size} lançamento(s) selecionado(s)</p>
           <div className="flex gap-2">
             <button onClick={() => setSelecionados(new Set())} className="text-xs text-gray-500 underline">Limpar</button>
             <button onClick={excluirSelecionados} className="btn-danger text-sm py-1">🗑 Excluir selecionados</button>
@@ -101,7 +101,7 @@ export function Historico() {
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
               <tr>
                 <th className="px-4 py-3 w-8">
-                  <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-red-600" />
+                  <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-rose-600" />
                 </th>
                 <th className="text-left px-4 py-3">Data</th>
                 <th className="text-left px-4 py-3">Tipo</th>
@@ -113,9 +113,9 @@ export function Historico() {
             </thead>
             <tbody>
               {filtrados.map(l => (
-                <tr key={l.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(l.id) ? 'bg-red-50' : ''}`}>
+                <tr key={l.id} className={`border-t border-gray-100 hover:bg-gray-50 ${selecionados.has(l.id) ? 'bg-rose-50' : ''}`}>
                   <td className="px-4 py-3">
-                    <input type="checkbox" checked={selecionados.has(l.id)} onChange={() => toggleSelecionado(l.id)} className="w-4 h-4 accent-red-600" />
+                    <input type="checkbox" checked={selecionados.has(l.id)} onChange={() => toggleSelecionado(l.id)} className="w-4 h-4 accent-rose-600" />
                   </td>
                   <td className="px-4 py-3 text-gray-500 text-xs whitespace-nowrap">
                     {new Date(l.data).toLocaleString('pt-BR', {
@@ -135,7 +135,7 @@ export function Historico() {
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Removido') }}
-                      className="text-gray-300 hover:text-red-500 transition-colors"
+                      className="text-gray-300 hover:text-rose-500 transition-colors"
                       title="Excluir"
                     >✕</button>
                   </td>

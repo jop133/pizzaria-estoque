@@ -117,7 +117,7 @@ export function Relatorios() {
                   <td className="px-3 py-2 text-right font-mono">{p.quantidade} {p.unidade}</td>
                   <td className="px-3 py-2 text-right font-mono text-gray-400">{p.estoque_minimo} {p.unidade}</td>
                   <td className="px-3 py-2 text-center">
-                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.quantidade <= (p.estoque_minimo || 0) ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${p.quantidade <= (p.estoque_minimo || 0) ? 'bg-rose-100 text-rose-600' : 'bg-green-100 text-green-600'}`}>
                       {p.quantidade <= (p.estoque_minimo || 0) ? 'BAIXO' : 'OK'}
                     </span>
                   </td>
@@ -132,7 +132,7 @@ export function Relatorios() {
 }
 
 function Stat({ label, value, color }) {
-  const c = { red: 'text-red-600 bg-red-50', green: 'text-green-600 bg-green-50', blue: 'text-blue-600 bg-blue-50', orange: 'text-orange-600 bg-orange-50' }
+  const c = { red: 'text-rose-600 bg-rose-50', green: 'text-green-600 bg-green-50', blue: 'text-blue-600 bg-blue-50', orange: 'text-orange-600 bg-orange-50' }
   return (
     <div className={`rounded-xl p-4 ${c[color]}`}>
       <p className="text-xs font-medium opacity-70">{label}</p>
