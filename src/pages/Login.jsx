@@ -65,7 +65,8 @@ export function Login() {
       await criarOrganizacao(nomeOrg.trim(), nome.trim())
       toast.success('Organização criada! Bem-vindo!')
     } catch (err) {
-      toast.error(err.message)
+      toast.error(err.message || 'Erro desconhecido ao criar organização', { duration: 6000 })
+      console.error('Erro criarOrganizacao:', err)
     } finally {
       setLoading(false)
     }

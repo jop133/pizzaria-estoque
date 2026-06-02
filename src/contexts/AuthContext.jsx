@@ -72,10 +72,13 @@ export function AuthProvider({ children }) {
     try {
       const { data, error } = await supabase.auth.signUp({ email, password: senha })
       if (error) throw new Error(error.message)
-      const userId = data.user?.id
-      if (!userId) throw new Error('Erro ao criar conta')
+      if (!data.user?.id) throw new Error('Erro ao criar conta')
+
+      // Faz login explícito para garantir sessão ativa
+      const { error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
+      if (loginErr) throw new Error(loginErr.message)
+
       setUser(data.user)
-      // Não carrega perfil ainda — usuário ainda não tem organização
     } finally {
       bloqueandoRef.current = false
     }
@@ -83,10 +86,9 @@ export function AuthProvider({ children }) {
 
   // Cria organização para o usuário logado e o torna Dono
   async function criarOrganizacao(nomeOrg, nomeUsuario) {
-    // Usa o user do estado React — mais confiável que getUser() logo após signup
     const { data: { session: s } } = await supabase.auth.getSession()
     const u = s?.user
-    if (!u) throw new Error('Sessão não encontrada. Faça login novamente.')
+    if (!u) throw new Error('Sessão expirada — faça login novamente')
 
     const { data: org, error: orgErr } = await supabase
       .from('organizacoes')
