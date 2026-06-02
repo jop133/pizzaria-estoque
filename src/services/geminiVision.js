@@ -1,33 +1,22 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
+const MODEL = 'meta-llama/llama-4-maverick-17b-128e-instruct'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
-  const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
-  const listaFichas = fichas.map(f => `- ${f.nome}`).join('\n')
+  const prompt = `Voce transcreve documentos de estoque. Sua UNICA tarefa e ler a imagem e copiar fielmente cada linha. Nao interprete, nao compare com nada, nao some. Apenas transcreva o que esta escrito.
 
-  const prompt = `Voce e um leitor de documentos de estoque. Leia a imagem com atencao e extraia TODOS os itens e quantidades visiveis.
+Tipo do documento: "entrada" = nota fiscal ou lista de compras | "saida_ficha" = comanda/pedido | "saida_manual" = descarte | "desconhecido" = outro.
 
-PASSO 1 — Classifique o documento:
-"entrada" = nota fiscal ou lista de compras | "saida_ficha" = comanda ou pedido | "saida_manual" = descarte | "desconhecido" = outro
+Para CADA linha do documento, sem pular nenhuma:
+- nome: o texto do item exatamente como escrito (mantenha o peso se estiver no nome, ex: "MEL 780G").
+- quantidade: o numero escrito na linha (frascos/pacotes/unidades). Em tabela manuscrita, o numero da coluna da direita pertence a linha na MESMA altura horizontal. Celula vazia ou "O" = 0. Sem numero visivel = 1.
+- pesoEmbalagem: se o nome tiver peso/volume (ex: 780G, 200G, 900ML), o NUMERO (ex: 780). Senao null.
+- unidadeEmbalagem: a unidade do peso ("g","kg","ml","l") ou null.
+- marca: a marca do fabricante se aparecer, senao null.
 
-PASSO 2 — Liste TODOS os itens da imagem sem excecao. Para tabelas com quantidades escritas a mao na coluna da direita: cada numero pertence a linha que esta na MESMA altura horizontal que ele, nao a linha acima nem abaixo. Se a celula estiver vazia ou com "O" (letra O), a quantidade e 0.
-
-PASSO 3 — Para cada item, verifique se existe correspondencia SEMANTICA na lista abaixo. O produto precisa ser o mesmo tipo (ex: "Batata Palito McCain" = "Batata Palito"). NAO faca correspondencia por substring ou coincidencia parcial de letras (ex: "Molho de Pimenta Vermelha" NAO e "Mel" so porque contem as letras m-e-l). Se nao tiver certeza, use null.
-
-PASSO 4 — Se identificar a marca do fabricante no nome do item, coloque em marca. Caso contrario null.
-
-PASSO 5 — quantidade = o numero de unidades contadas na imagem (quantos frascos/pacotes/pecas). NAO converta nada, NAO multiplique nada, apenas o numero contado. Se NAO houver contagem visivel, use 1.
-
-PASSO 6 — Se o nome do item tiver o peso/volume da embalagem (ex: "MEL 780G", "MILHO 200G", "OLEO 900ML"), preencha pesoEmbalagem com o NUMERO (ex: 780) e unidadeEmbalagem com a unidade ("g", "kg", "ml" ou "l"). Se nao houver peso visivel, pesoEmbalagem=null e unidadeEmbalagem=null. NUNCA some pesos, cada embalagem mantem seu proprio peso unitario.
-
-Produtos no estoque:
-${listaProdutos || '(nenhum)'}
-
-Fichas tecnicas:
-${listaFichas || '(nenhuma)'}
+Regras: copie TODAS as linhas. Nao converta nem multiplique pesos. Cada linha e um item separado, mesmo que o nome se repita.
 
 Retorne SOMENTE este JSON:
-{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome como na imagem","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}`
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
 
   const body = {
     model: MODEL,
