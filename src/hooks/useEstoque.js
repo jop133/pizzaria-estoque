@@ -17,7 +17,7 @@ function useTabela(table, queryFn, extraDeps = []) {
     buscar()
 
     const channel = supabase
-      .channel(`${table}-${organizacaoId}`)
+      .channel(`${table}-${organizacaoId}-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table }, buscar)
       .subscribe()
 
@@ -63,7 +63,7 @@ export function useLancamentos() {
     buscar()
 
     const channel = supabase
-      .channel(`lancamentos-${organizacaoId}`)
+      .channel(`lancamentos-${organizacaoId}-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'lancamentos' }, buscar)
       .subscribe()
 
@@ -91,7 +91,7 @@ export function useFichaIngredientes(fichaId) {
     buscar()
 
     const channel = supabase
-      .channel(`ficha-ing-${fichaId}`)
+      .channel(`ficha-ing-${fichaId}-${Math.random().toString(36).slice(2)}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'ficha_ingredientes' }, buscar)
       .subscribe()
 
