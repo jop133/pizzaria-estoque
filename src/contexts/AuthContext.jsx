@@ -12,11 +12,14 @@ export function AuthProvider({ children }) {
   const bloqueandoRef = useRef(false)
 
   async function carregarPerfil(userId) {
-    const { data } = await supabase
+    const { data: rows } = await supabase
       .from('membros')
       .select('*, organizacoes(*)')
       .eq('user_id', userId)
-      .single()
+      .order('criado_em', { ascending: true })
+      .limit(1)
+
+    const data = rows?.[0]
 
     if (data) {
       setMembro(data)
@@ -99,21 +102,20 @@ export function AuthProvider({ children }) {
     await carregarPerfil(u.id)
   }
 
-  async function entrarPorConvite(email, senha, nome, token) {
+  async function entrarPorConvite(email, senha, nome, token, criarConta) {
     bloqueandoRef.current = true
     try {
       let userId
-      // Tenta login primeiro; se falhar, cria conta
-      const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
-      if (loginErr) {
+      if (criarConta) {
         const { error: regErr } = await supabase.auth.signUp({ email, password: senha })
         if (regErr) throw new Error(regErr.message)
-        // Garante sessão ativa após cadastro
         const { data: postLogin, error: postErr } = await supabase.auth.signInWithPassword({ email, password: senha })
         if (postErr) throw new Error(postErr.message)
         userId = postLogin.user?.id
         if (postLogin.user) setUser(postLogin.user)
       } else {
+        const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({ email, password: senha })
+        if (loginErr) throw new Error('E-mail ou senha incorretos')
         userId = loginData.user?.id
         if (loginData.user) setUser(loginData.user)
       }

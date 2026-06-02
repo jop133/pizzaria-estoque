@@ -6,6 +6,7 @@ import toast from 'react-hot-toast'
 export function Login() {
   const { login, registrar, criarOrganizacao, entrarPorConvite, user } = useAuth()
   const [modo, setModo] = useState('login') // 'login' | 'registro' | 'criar_org' | 'convite' | 'recuperar'
+  const [conviteAuth, setConviteAuth] = useState('login') // 'login' | 'registro'
   const [loading, setLoading] = useState(false)
 
   const [email, setEmail] = useState('')
@@ -74,10 +75,11 @@ export function Login() {
 
   async function handleConvite(e) {
     e.preventDefault()
-    if (!nome.trim()) return toast.error('Informe seu nome')
+    const criarConta = conviteAuth === 'registro'
+    if (criarConta && !nome.trim()) return toast.error('Informe seu nome')
     setLoading(true)
     try {
-      await entrarPorConvite(email, senha, nome.trim(), token)
+      await entrarPorConvite(email, senha, nome.trim(), token, criarConta)
       toast.success('Você entrou na organização!')
       window.history.replaceState({}, '', window.location.pathname)
     } catch (err) {
@@ -154,23 +156,43 @@ export function Login() {
             <>
               <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
                 <p className="text-green-700 font-medium text-sm">🎉 Você foi convidado!</p>
-                <p className="text-green-600 text-xs mt-1">Faça login ou crie sua conta para entrar na equipe.</p>
+                <p className="text-green-600 text-xs mt-1">Já tem conta? Faça login. Senão, crie uma para entrar na equipe.</p>
               </div>
+
+              <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+                <button
+                  type="button"
+                  onClick={() => setConviteAuth('login')}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${conviteAuth === 'login' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+                >
+                  Já tenho conta
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConviteAuth('registro')}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${conviteAuth === 'registro' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+                >
+                  Criar conta
+                </button>
+              </div>
+
               <form onSubmit={handleConvite} className="space-y-3">
-                <div>
-                  <label className="label">Seu Nome</label>
-                  <input className="input" placeholder="Ex: João Silva" value={nome} onChange={e => setNome(e.target.value)} required />
-                </div>
+                {conviteAuth === 'registro' && (
+                  <div>
+                    <label className="label">Seu Nome</label>
+                    <input className="input" placeholder="Ex: João Silva" value={nome} onChange={e => setNome(e.target.value)} required />
+                  </div>
+                )}
                 <div>
                   <label className="label">E-mail</label>
                   <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
                 </div>
                 <div>
                   <label className="label">Senha</label>
-                  <input type="password" className="input" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} minLength={6} required />
+                  <input type="password" className="input" placeholder={conviteAuth === 'registro' ? 'Mínimo 6 caracteres' : 'Sua senha'} value={senha} onChange={e => setSenha(e.target.value)} minLength={conviteAuth === 'registro' ? 6 : undefined} required />
                 </div>
                 <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
-                  {loading ? 'Aguarde...' : 'Entrar na Equipe'}
+                  {loading ? 'Aguarde...' : (conviteAuth === 'registro' ? 'Criar conta e entrar' : 'Entrar na Equipe')}
                 </button>
               </form>
             </>
