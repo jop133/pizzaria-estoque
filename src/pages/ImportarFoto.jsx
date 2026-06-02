@@ -75,6 +75,26 @@ export function ImportarFoto() {
     return parcial?.id ?? null
   }
 
+  const normalizar = s => (s || '').trim().toLowerCase()
+
+  // Um item será criado como produto novo (não cadastrado) quando estiver
+  // ativo, sem vínculo e a foto não for saída por ficha.
+  function ehProdutoNovo(item, tipoFoto) {
+    return item.ativo && !item.produtoId && !item.fichaId && tipoFoto !== 'saida_ficha'
+  }
+
+  // Conta quantos itens (em toda a fila) serão agrupados no mesmo produto novo.
+  function contarNoGrupo(baseKey) {
+    let n = 0
+    for (const f of fila) {
+      if (f.status !== 'pronto') continue
+      for (const it of f.itens) {
+        if (ehProdutoNovo(it, f.resultado?.tipo) && normalizar(it.nomeBase || it.nome) === baseKey) n++
+      }
+    }
+    return n
+  }
+
   // Fator para converter o peso da embalagem na unidade do produto cadastrado.
   function fatorConversao(produtoU, pesoU) {
     const fatores = {
@@ -122,8 +142,10 @@ export function ImportarFoto() {
         const { base64, mimeType } = await prepararImagem(foto.file)
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
         const itens = res.itens.map(item => {
-          const produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
-          const fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
+          let produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
+          if (!produtoId && item.nomeBase) produtoId = encontrarProdutoId(null, item.nomeBase)
+          let fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
+          if (!fichaId && item.nomeBase) fichaId = encontrarFichaId(null, item.nomeBase)
           const prod = produtos.find(p => p.id === produtoId)
           const prodUnidade = (prod?.unidade || '').toLowerCase()
           // Se o produto é por peso e a IA não trouxe a unidade da embalagem,
@@ -141,6 +163,8 @@ export function ImportarFoto() {
             quantidade: item.quantidade ?? 1,
             pesoEmbalagem: item.pesoEmbalagem ?? '',
             unidadeEmbalagem,
+            // Nome usado para criar/agrupar produtos não cadastrados (editável).
+            nomeBase: (item.nomeBase || item.nome || '').trim(),
           }
         })
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'pronto', resultado: res, itens } : f))
@@ -170,6 +194,9 @@ export function ImportarFoto() {
     let semPeso = 0
     // Índices lançados com sucesso por foto, para não relançar em nova confirmação.
     const lancadosPorFoto = {}
+    // Produtos novos criados nesta confirmação, por nomeBase, para agrupar
+    // itens não cadastrados do mesmo tipo num único produto.
+    const criadosPorBase = {}
 
     for (const foto of prontas) {
       lancadosPorFoto[foto.id] = new Set()
@@ -181,16 +208,24 @@ export function ImportarFoto() {
           let fichaId = item.fichaId
 
           if (!produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha') {
-            const { data: novo } = await supabase.from('produtos').insert({
-              organizacao_id: session.organizacaoId,
-              nome: item.nome,
-              categoria: 'Outros',
-              unidade: item.unidade || 'un',
-              quantidade: 0,
-              estoque_minimo: 0,
-            }).select().single()
-            produtoId = novo?.id
-            criados++
+            const baseKey = normalizar(item.nomeBase || item.nome)
+            if (criadosPorBase[baseKey]) {
+              // Já criado nesta confirmação por outro item do mesmo tipo: reaproveita.
+              produtoId = criadosPorBase[baseKey]
+            } else {
+              const nomeNovo = (item.nomeBase || item.nome || '').trim()
+              const { data: novo } = await supabase.from('produtos').insert({
+                organizacao_id: session.organizacaoId,
+                nome: nomeNovo,
+                categoria: 'Outros',
+                unidade: item.unidade || 'un',
+                quantidade: 0,
+                estoque_minimo: 0,
+              }).select().single()
+              produtoId = novo?.id
+              if (produtoId) criadosPorBase[baseKey] = produtoId
+              criados++
+            }
           }
 
           // Total que vai para o estoque: contagem x peso convertido (produtos
@@ -442,6 +477,23 @@ export function ImportarFoto() {
                                 value={item.marca || ''}
                                 onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)}
                               />
+                            </div>
+                          )}
+                          {!vinculo && foto.resultado.tipo !== 'saida_ficha' && (
+                            <div className="ml-6">
+                              <label className="label">Criar como (itens com o mesmo nome são unidos)</label>
+                              <input
+                                className="input text-sm"
+                                placeholder="Ex: Queijo Mussarela"
+                                value={item.nomeBase || ''}
+                                onChange={e => atualizarItem(foto.id, i, 'nomeBase', e.target.value)}
+                              />
+                              {(() => {
+                                const n = contarNoGrupo(normalizar(item.nomeBase || item.nome))
+                                return n > 1
+                                  ? <p className="text-xs text-blue-600 mt-1">🔗 será unido com {n - 1} outro(s) item(ns) deste tipo</p>
+                                  : <p className="text-xs text-gray-400 mt-1">novo produto</p>
+                              })()}
                             </div>
                           )}
                           {vinculo && <p className="ml-6 text-xs text-green-600">✓ {vinculo.nome}</p>}
