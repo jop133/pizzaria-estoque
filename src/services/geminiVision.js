@@ -1,5 +1,5 @@
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const MODEL = 'meta-llama/llama-4-maverick-17b-128e-instruct'
+const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
 
 export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
   const prompt = `Voce transcreve documentos de estoque. Sua UNICA tarefa e ler a imagem e copiar fielmente cada linha. Nao interprete, nao compare com nada, nao some. Apenas transcreva o que esta escrito.
