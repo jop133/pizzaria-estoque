@@ -58,7 +58,9 @@ function AppInner() {
     return (
       <div className="min-h-screen bg-red-600 flex items-center justify-center">
         <div className="text-center text-white space-y-3">
-          <div className="text-5xl">🍕</div>
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-white shadow-lg overflow-hidden animate-pulse">
+            <img src="/logo.png" alt="" className="w-16 h-16 object-contain" />
+          </div>
           <p className="font-semibold">Carregando...</p>
         </div>
       </div>
@@ -97,7 +99,7 @@ function AppInner() {
         >
           <Menu className="w-6 h-6" />
         </button>
-        <span className="text-2xl">🍕</span>
+        <img src="/logo.png" alt="" className="w-9 h-9 rounded-md bg-white object-contain p-0.5 shrink-0" />
         <div className="min-w-0">
           <h1 className="font-bold text-base leading-tight truncate">{ABAS[aba]?.label || 'Pizzaria Estoque'}</h1>
           <p className="text-red-200 text-xs truncate">{organizacao?.nome || 'Controle de estoque'}</p>
@@ -129,8 +131,8 @@ function AppInner() {
           {/* Topo do menu */}
           <div className="bg-red-600 text-white p-4">
             <div className="flex items-center gap-2">
-              <span className="text-2xl">🍕</span>
-              <span className="font-bold text-lg">Pizzaria Estoque</span>
+              <img src="/logo.png" alt="" className="w-10 h-10 rounded-md bg-white object-contain p-0.5" />
+              <span className="font-bold text-lg">Pier Pizza</span>
             </div>
             {membros.length > 1 ? (
               <select

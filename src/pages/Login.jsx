@@ -112,15 +112,24 @@ export function Login() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-red-600 to-red-800 flex items-center justify-center p-4">
-      <div className="w-full max-w-sm">
-        <div className="text-center mb-8">
-          <div className="text-6xl mb-2">🍕</div>
-          <h1 className="text-white text-2xl font-bold">Pier Pizza & Cantina</h1>
-          <p className="text-red-200 text-sm mt-1">Controle de Estoque</p>
+    <div className="min-h-screen relative flex items-center justify-center p-4">
+      {/* Fundo: foto da fachada + escurecimento para contraste */}
+      <div
+        className="absolute inset-0 bg-cover bg-center"
+        style={{ backgroundImage: 'url(/login-bg.webp)' }}
+      />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/55 to-red-950/85" />
+
+      <div className="relative w-full max-w-sm">
+        <div className="text-center mb-6">
+          <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-white shadow-lg ring-4 ring-white/25 overflow-hidden">
+            <img src="/logo.png" alt="Pier Pizza & Cantina" className="w-20 h-20 object-contain" />
+          </div>
+          <h1 className="text-white text-2xl font-bold mt-3 drop-shadow-lg">Pier Pizza &amp; Cantina</h1>
+          <p className="text-red-100 text-sm mt-1 drop-shadow">Controle de Estoque</p>
         </div>
 
-        <div className="bg-white rounded-2xl shadow-xl p-6 space-y-5">
+        <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl p-6 space-y-5">
 
           {/* ── CRIAR ORGANIZAÇÃO ── */}
           {modo === 'criar_org' && (
