@@ -150,9 +150,21 @@ export function ImportarFoto() {
           const fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
           const prod = produtos.find(p => p.id === produtoId)
           const prodUnidade = (prod?.unidade || '').toLowerCase()
-          // Se o produto é por peso e a IA não trouxe a unidade da embalagem,
-          // assume a própria unidade do produto como padrão para o usuário ajustar.
+
+          let pesoEmbalagem = item.pesoEmbalagem ?? ''
           let unidadeEmbalagem = (item.unidadeEmbalagem || '').toLowerCase()
+          // Se a IA não preencheu peso/volume explícito (comum em líquidos),
+          // tenta extrair do próprio nome do item (ex: "OLEO 900ML" -> 900 ml).
+          const temExplicito = String(pesoEmbalagem).trim() !== '' && UNIDADES_PESO.includes(unidadeEmbalagem)
+          if (!temExplicito) {
+            const m = (item.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
+            if (m) {
+              pesoEmbalagem = parseFloat(m[1].replace(',', '.'))
+              unidadeEmbalagem = m[2].toLowerCase()
+            }
+          }
+          // Se o produto é por peso e ainda não há unidade da embalagem,
+          // assume a própria unidade do produto como padrão para o usuário ajustar.
           if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
             unidadeEmbalagem = prodUnidade
           }
@@ -163,7 +175,7 @@ export function ImportarFoto() {
             produtoId,
             fichaId,
             quantidade: item.quantidade ?? 1,
-            pesoEmbalagem: item.pesoEmbalagem ?? '',
+            pesoEmbalagem,
             unidadeEmbalagem,
           }
         })
