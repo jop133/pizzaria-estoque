@@ -158,6 +158,14 @@ export function AuthProvider({ children }) {
     definirOrg(orgId)
   }
 
+  // Exclui uma organização (apenas Dono) — apaga todos os dados em cascata
+  async function excluirOrganizacao(orgId) {
+    const { error } = await supabase.rpc('excluir_organizacao', { org_id: orgId })
+    if (error) throw new Error(error.message)
+    if (orgAtualId === orgId) definirOrg(null)
+    if (user) await carregarPerfil(user.id)
+  }
+
   async function logout() {
     await supabase.auth.signOut()
   }
@@ -182,6 +190,7 @@ export function AuthProvider({ children }) {
     entrarPorConvite,
     aceitarConvite,
     trocarOrg,
+    excluirOrganizacao,
     logout,
     recarregarPerfil,
   }

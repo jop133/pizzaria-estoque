@@ -8,13 +8,16 @@ const PAPEL_COR = { dono: 'red', admin: 'orange', funcionario: 'gray' }
 const PAPEL_LABEL = { dono: '👑 Dono', admin: '⭐ Admin', funcionario: '👤 Funcionário' }
 
 export function Configuracoes() {
-  const { user, membro, membros: minhasOrgs, organizacao, papel, isDono, trocarOrg, criarOrganizacao, logout, recarregarPerfil } = useAuth()
+  const { user, membro, membros: minhasOrgs, organizacao, papel, isDono, trocarOrg, criarOrganizacao, excluirOrganizacao, logout, recarregarPerfil } = useAuth()
   const [membros, setMembros] = useState([])
   const [linkConvite, setLinkConvite] = useState('')
   const [gerandoLink, setGerandoLink] = useState(false)
   const [loading, setLoading] = useState(true)
   const [novaOrg, setNovaOrg] = useState('')
   const [criandoOrg, setCriandoOrg] = useState(false)
+  const [confirmandoExclusao, setConfirmandoExclusao] = useState(false)
+  const [nomeConfirmacao, setNomeConfirmacao] = useState('')
+  const [excluindo, setExcluindo] = useState(false)
 
   useEffect(() => {
     carregarMembros()
@@ -67,6 +70,23 @@ export function Configuracoes() {
       toast.error(e.message)
     } finally {
       setCriandoOrg(false)
+    }
+  }
+
+  async function handleExcluirOrg() {
+    if (nomeConfirmacao.trim() !== organizacao?.nome) {
+      return toast.error('O nome digitado não confere')
+    }
+    setExcluindo(true)
+    try {
+      await excluirOrganizacao(organizacao.id)
+      toast.success('Organização excluída')
+      setConfirmandoExclusao(false)
+      setNomeConfirmacao('')
+    } catch (e) {
+      toast.error(e.message)
+    } finally {
+      setExcluindo(false)
     }
   }
 
@@ -254,6 +274,53 @@ export function Configuracoes() {
           </div>
         )}
       </div>
+
+      {/* Zona de Perigo — só Dono */}
+      {isDono && organizacao && (
+        <div className="bg-white border border-red-200 rounded-xl p-4 space-y-3">
+          <h2 className="font-semibold text-red-600">⚠️ Zona de Perigo</h2>
+          <p className="text-xs text-gray-500">
+            Excluir a organização <strong>{organizacao.nome}</strong> apaga permanentemente todos os
+            produtos, fichas, lançamentos e membros. Esta ação não pode ser desfeita.
+          </p>
+
+          {!confirmandoExclusao ? (
+            <button
+              onClick={() => setConfirmandoExclusao(true)}
+              className="w-full text-sm text-red-600 border border-red-300 hover:bg-red-50 rounded-xl py-2 font-medium transition-colors"
+            >
+              Excluir organização
+            </button>
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-3">
+              <p className="text-xs text-red-700">
+                Para confirmar, digite o nome exato da organização: <strong>{organizacao.nome}</strong>
+              </p>
+              <input
+                className="input"
+                placeholder="Nome da organização"
+                value={nomeConfirmacao}
+                onChange={e => setNomeConfirmacao(e.target.value)}
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={() => { setConfirmandoExclusao(false); setNomeConfirmacao('') }}
+                  className="flex-1 text-sm text-gray-600 border border-gray-200 hover:bg-gray-50 rounded-xl py-2 font-medium"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleExcluirOrg}
+                  disabled={excluindo || nomeConfirmacao.trim() !== organizacao.nome}
+                  className="flex-1 text-sm text-white bg-red-600 hover:bg-red-700 rounded-xl py-2 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {excluindo ? 'Excluindo...' : 'Excluir definitivamente'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
