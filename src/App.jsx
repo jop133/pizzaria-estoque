@@ -3,7 +3,7 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import {
   Home, Package, PencilLine, Camera, History,
-  ClipboardList, BarChart3, Settings, LogOut, Menu, AlertTriangle,
+  ClipboardList, BarChart3, Settings, LogOut, Menu, AlertTriangle, ShoppingCart,
 } from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Login } from './pages/Login'
@@ -15,12 +15,14 @@ import { Historico } from './pages/Historico'
 import { Relatorios } from './pages/Relatorios'
 import { ImportarFoto } from './pages/ImportarFoto'
 import { Configuracoes } from './pages/Configuracoes'
+import { ListaCompras } from './pages/ListaCompras'
 import { useProdutosAbaixoMinimo } from './hooks/useEstoque'
 
 // Definição central das telas
 const ABAS = {
   dashboard: { label: 'Início', Icon: Home },
   estoque: { label: 'Estoque', Icon: Package },
+  compras: { label: 'Lista de Compras', Icon: ShoppingCart },
   lancamentos: { label: 'Lançar', Icon: PencilLine },
   foto: { label: 'Foto IA', Icon: Camera },
   historico: { label: 'Histórico', Icon: History },
@@ -31,7 +33,7 @@ const ABAS = {
 
 // Grupos exibidos no menu lateral
 const GRUPOS = [
-  { titulo: 'Principal', itens: ['dashboard', 'estoque', 'lancamentos', 'foto', 'historico'] },
+  { titulo: 'Principal', itens: ['dashboard', 'estoque', 'compras', 'lancamentos', 'foto', 'historico'] },
   { titulo: 'Gestão', itens: ['fichas', 'relatorios'] },
   { titulo: 'Conta', itens: ['config'] },
 ]
@@ -78,6 +80,7 @@ function AppInner() {
     switch (aba) {
       case 'dashboard': return <Dashboard />
       case 'estoque': return <Estoque />
+      case 'compras': return <ListaCompras />
       case 'fichas': return <FichasTecnicas />
       case 'lancamentos': return <Lancamentos />
       case 'historico': return <Historico />
@@ -106,7 +109,7 @@ function AppInner() {
         </div>
         {abaixoMinimo.length > 0 && (
           <button
-            onClick={() => setAba('estoque')}
+            onClick={() => setAba('compras')}
             className="ml-auto flex items-center gap-1 bg-red-600 hover:bg-red-500 text-white text-xs font-bold px-3 py-1.5 rounded-full animate-pulse shrink-0"
           >
             <AlertTriangle className="w-3.5 h-3.5" /> {abaixoMinimo.length}
