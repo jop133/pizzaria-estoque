@@ -43,7 +43,7 @@ Regras IMPORTANTES:
         ]
       }
     ],
-    max_tokens: 2048,
+    max_tokens: 4096,
     temperature: 0.1,
     response_format: { type: 'json_object' },
   }
