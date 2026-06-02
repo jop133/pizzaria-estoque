@@ -12,12 +12,11 @@ Para CADA linha do documento, sem pular nenhuma:
 - pesoEmbalagem: se o nome tiver peso/volume (ex: 780G, 200G, 900ML), o NUMERO (ex: 780). Senao null.
 - unidadeEmbalagem: a unidade do peso ("g","kg","ml","l") ou null.
 - marca: a marca do fabricante se aparecer, senao null.
-- nomeBase: o TIPO do produto, sem marca, sem peso e sem embalagem. Ex: "Queijo Mussarela Tirolez 1kg" -> "Queijo Mussarela"; "MEL FLORES 780G" -> "Mel". Itens do mesmo tipo (marcas diferentes) devem ter o MESMO nomeBase. Mantenha tipos diferentes distintos (ex: "Queijo Mussarela" != "Queijo Gorgonzola").
 
 Regras: copie TODAS as linhas. Nao converta nem multiplique pesos. Cada linha e um item separado, mesmo que o nome se repita.
 
 Retorne SOMENTE este JSON:
-{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null,"nomeBase":""}],"confianca":"alta","observacao":""}`
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
 
   const body = {
     model: MODEL,
