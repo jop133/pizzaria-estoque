@@ -82,6 +82,7 @@ export function ImportarFoto() {
         const itens = res.itens.map(item => ({
           ...item,
           ativo: true,
+          marca: item.marca || '',
           produtoId: encontrarProdutoId(item.nomeCadastrado, item.nome),
           fichaId: encontrarFichaId(item.nomeCadastrado, item.nome),
         }))
@@ -131,7 +132,7 @@ export function ImportarFoto() {
 
           if (foto.resultado.tipo === 'entrada') {
             if (!produtoId) { erros++; continue }
-            await registrarEntrada(produtoId, item.quantidade, 'Importado por foto')
+            await registrarEntrada(produtoId, item.quantidade, 'Importado por foto', item.marca || '')
           } else if (foto.resultado.tipo === 'saida_ficha') {
             if (fichaId) await registrarSaidaFicha(fichaId, item.quantidade, 'Importado por foto')
             else if (produtoId) await registrarSaidaManual(produtoId, item.quantidade, 'Importado por foto')
@@ -288,6 +289,17 @@ export function ImportarFoto() {
                               )}
                             </div>
                           </div>
+                          {foto.resultado.tipo === 'entrada' && (
+                            <div className="ml-6">
+                              <label className="label">Marca (opcional)</label>
+                              <input
+                                className="input text-sm"
+                                placeholder="Ex: Tio João"
+                                value={item.marca || ''}
+                                onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)}
+                              />
+                            </div>
+                          )}
                           {vinculo && <p className="ml-6 text-xs text-green-600">✓ {vinculo.nome}</p>}
                         </div>
                       )

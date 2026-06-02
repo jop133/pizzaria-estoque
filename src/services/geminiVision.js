@@ -13,19 +13,20 @@ Tipo do documento:
 - descarte ou uso interno = "saida_manual"
 - outro = "desconhecido"
 
-Produtos no estoque:
+Produtos cadastrados no estoque:
 ${listaProdutos || '(nenhum)'}
 
 Fichas tecnicas:
 ${listaFichas || '(nenhuma)'}
 
 Retorne SOMENTE este JSON, sem texto adicional:
-{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome do item","quantidade":1,"unidade":"kg","nomeCadastrado":null}],"confianca":"alta","observacao":""}
+{"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"nome original na imagem","quantidade":1,"unidade":"kg","nomeCadastrado":null,"marca":null}],"confianca":"alta","observacao":""}
 
-Regras:
+Regras IMPORTANTES:
 - Use aspas duplas no JSON
 - quantidade deve ser numero
-- nomeCadastrado deve ser o nome exato do produto/ficha cadastrado acima ou null
+- nomeCadastrado: compare o item com a lista de produtos cadastrados acima. Se for o mesmo tipo de produto (ex: "Arroz Tio Joao" = "Arroz"), use o nome EXATO do cadastro. Produtos diferentes (ex: "Queijo Mussarela" e "Queijo Gorgonzola") sao produtos distintos e nao devem ser confundidos. Se nao encontrar correspondencia, use null.
+- marca: se o item tiver uma marca identificavel na imagem (ex: "Tio Joao", "Italac"), preencha aqui. Caso contrario null.
 - confianca: "alta", "media" ou "baixa"
 - observacao pode ser string vazia`
 

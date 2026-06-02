@@ -14,7 +14,7 @@ export function Lancamentos() {
   const produtos = useProdutos()
   const fichas = useFichas()
   const [tipo, setTipo] = useState('saida_ficha')
-  const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '' })
+  const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
   const [loading, setLoading] = useState(false)
   const [analisandoFoto, setAnalisandoFoto] = useState(false)
   const [previewFoto, setPreviewFoto] = useState(null)
@@ -52,7 +52,7 @@ export function Lancamentos() {
         } else {
           const prod = produtos.find(p => p.nome.toLowerCase() === busca)
             || produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
-          setForm(f => ({ ...f, quantidade: String(qtd), produtoId: prod ? String(prod.id) : '' }))
+          setForm(f => ({ ...f, quantidade: String(qtd), produtoId: prod ? String(prod.id) : '', marca: item.marca || '' }))
           if (!prod && item.nome) toast(`Produto "${item.nome}" não encontrado — selecione manualmente`, { icon: '⚠️' })
         }
 
@@ -85,10 +85,10 @@ export function Lancamentos() {
         toast.success('Saída manual lançada!')
       } else {
         if (!form.produtoId) return toast.error('Selecione o produto')
-        await registrarEntrada(parseInt(form.produtoId), qtd, form.observacao)
+        await registrarEntrada(parseInt(form.produtoId), qtd, form.observacao, form.marca)
         toast.success('Entrada registrada! Estoque atualizado.')
       }
-      setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '' })
+      setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
       setPreviewFoto(null)
     } catch (e) {
       toast.error(e.message || 'Erro ao lançar')
@@ -185,6 +185,18 @@ export function Lancamentos() {
             onChange={e => setForm(f => ({ ...f, quantidade: e.target.value }))}
           />
         </div>
+
+        {tipo === 'entrada' && (
+          <div>
+            <label className="label">Marca (opcional)</label>
+            <input
+              className="input"
+              placeholder="Ex: Tio João, Italac, Forno de Minas..."
+              value={form.marca}
+              onChange={e => setForm(f => ({ ...f, marca: e.target.value }))}
+            />
+          </div>
+        )}
 
         <div>
           <label className="label">Observação (opcional)</label>

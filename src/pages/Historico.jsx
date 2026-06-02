@@ -84,6 +84,7 @@ export function Historico() {
                   </td>
                   <td className="px-4 py-3 font-medium text-gray-800">
                     {l.nomeFicha || l.nomeProduto || '—'}
+                    {l.marca && <span className="ml-1 text-xs text-gray-400 font-normal">· {l.marca}</span>}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">{l.quantidade}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{l.observacao || '—'}</td>

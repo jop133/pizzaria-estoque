@@ -60,7 +60,7 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
   })
 }
 
-export async function registrarEntrada(produtoId, quantidade, observacao = '') {
+export async function registrarEntrada(produtoId, quantidade, observacao = '', marca = '') {
   const orgId = session.organizacaoId
   if (!orgId) throw new Error('Sem organização ativa')
 
@@ -82,6 +82,7 @@ export async function registrarEntrada(produtoId, quantidade, observacao = '') {
     produto_id: produtoId,
     quantidade,
     observacao,
+    marca: marca || null,
     user_id: session.userId,
   })
 }
