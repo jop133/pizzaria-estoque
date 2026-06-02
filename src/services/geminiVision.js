@@ -58,7 +58,7 @@ Retorne SOMENTE este JSON:
     if (!resultado.tipo) resultado.tipo = 'desconhecido'
     return resultado
   } catch (e) {
-    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200))
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200), { cause: e })
   }
 }
 
@@ -119,7 +119,7 @@ Regras:
     if (!resultado.ingredientes) resultado.ingredientes = []
     return resultado
   } catch (e) {
-    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200))
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200), { cause: e })
   }
 }
 
