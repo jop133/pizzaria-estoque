@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react'
 import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
+import {
+  Home, Package, PencilLine, Camera, History,
+  ClipboardList, BarChart3, Settings, LogOut, Menu, AlertTriangle,
+} from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Login } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
@@ -15,14 +19,14 @@ import { useProdutosAbaixoMinimo } from './hooks/useEstoque'
 
 // Definição central das telas
 const ABAS = {
-  dashboard: { label: 'Início', icon: '🏠' },
-  estoque: { label: 'Estoque', icon: '📦' },
-  lancamentos: { label: 'Lançar', icon: '✏️' },
-  foto: { label: 'Foto IA', icon: '📷' },
-  historico: { label: 'Histórico', icon: '🕐' },
-  fichas: { label: 'Fichas Técnicas', icon: '📋' },
-  relatorios: { label: 'Relatórios', icon: '📈' },
-  config: { label: 'Configurações', icon: '⚙️' },
+  dashboard: { label: 'Início', Icon: Home },
+  estoque: { label: 'Estoque', Icon: Package },
+  lancamentos: { label: 'Lançar', Icon: PencilLine },
+  foto: { label: 'Foto IA', Icon: Camera },
+  historico: { label: 'Histórico', Icon: History },
+  fichas: { label: 'Fichas Técnicas', Icon: ClipboardList },
+  relatorios: { label: 'Relatórios', Icon: BarChart3 },
+  config: { label: 'Configurações', Icon: Settings },
 }
 
 // Grupos exibidos no menu lateral
@@ -91,9 +95,7 @@ function AppInner() {
           className="p-2 -ml-1 rounded-lg hover:bg-red-500 active:bg-red-700 transition-colors"
           aria-label="Abrir menu"
         >
-          <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
+          <Menu className="w-6 h-6" />
         </button>
         <span className="text-2xl">🍕</span>
         <div className="min-w-0">
@@ -103,9 +105,9 @@ function AppInner() {
         {abaixoMinimo.length > 0 && (
           <button
             onClick={() => setAba('estoque')}
-            className="ml-auto bg-red-500 hover:bg-red-400 text-white text-xs font-bold px-3 py-1.5 rounded-full animate-pulse shrink-0"
+            className="ml-auto flex items-center gap-1 bg-red-500 hover:bg-red-400 text-white text-xs font-bold px-3 py-1.5 rounded-full animate-pulse shrink-0"
           >
-            ⚠️ {abaixoMinimo.length}
+            <AlertTriangle className="w-3.5 h-3.5" /> {abaixoMinimo.length}
           </button>
         )}
       </header>
@@ -152,20 +154,23 @@ function AppInner() {
             {GRUPOS.map(grupo => (
               <div key={grupo.titulo} className="mb-1">
                 <p className="px-4 pt-3 pb-1 text-[10px] font-bold uppercase tracking-wide text-gray-400">{grupo.titulo}</p>
-                {grupo.itens.map(id => (
-                  <button
-                    key={id}
-                    onClick={() => irPara(id)}
-                    className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
-                      aba === id
-                        ? 'bg-red-50 text-red-700 font-semibold border-r-4 border-red-600'
-                        : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <span className="text-xl w-6 text-center">{ABAS[id].icon}</span>
-                    <span className="text-sm">{ABAS[id].label}</span>
-                  </button>
-                ))}
+                {grupo.itens.map(id => {
+                  const Icon = ABAS[id].Icon
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => irPara(id)}
+                      className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                        aba === id
+                          ? 'bg-red-50 text-red-700 font-semibold border-r-4 border-red-600'
+                          : 'text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <Icon className="w-5 h-5 shrink-0" />
+                      <span className="text-sm">{ABAS[id].label}</span>
+                    </button>
+                  )
+                })}
               </div>
             ))}
           </nav>
@@ -176,7 +181,7 @@ function AppInner() {
               onClick={() => { setMenuAberto(false); logout() }}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors"
             >
-              <span className="text-xl w-6 text-center">🚪</span>
+              <LogOut className="w-5 h-5 shrink-0" />
               <span className="text-sm font-medium">Sair</span>
             </button>
           </div>
@@ -190,7 +195,7 @@ function AppInner() {
           className="w-full flex items-center justify-center gap-2 py-3 text-red-600 active:bg-red-50 transition-colors"
           aria-label="Abrir menu de navegação"
         >
-          <span className="text-xl leading-none">{ABAS[aba]?.icon}</span>
+          {(() => { const Icon = ABAS[aba]?.Icon; return Icon ? <Icon className="w-5 h-5" /> : null })()}
           <span className="text-sm font-semibold">{ABAS[aba]?.label}</span>
         </button>
       </nav>
