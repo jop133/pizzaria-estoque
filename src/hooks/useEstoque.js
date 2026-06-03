@@ -106,3 +106,35 @@ export function useProdutosAbaixoMinimo() {
   const produtos = useProdutos()
   return produtos.filter(p => p.quantidade <= (p.estoque_minimo || 0))
 }
+
+// Todos os ingredientes/insumos da organização (de todas as fichas).
+// Usado para calcular custos de fichas e de produtos de produção.
+export function useTodosIngredientes() {
+  const [data, setData] = useState([])
+  const { organizacaoId } = useAuth()
+
+  useEffect(() => {
+    if (!organizacaoId) return
+
+    const buscar = async () => {
+      const { data: fichas } = await supabase
+        .from('fichas_tecnicas').select('id').eq('organizacao_id', organizacaoId)
+      const ids = (fichas || []).map(f => f.id)
+      if (ids.length === 0) { setData([]); return }
+      const { data: ings } = await supabase
+        .from('ficha_ingredientes').select('id, ficha_id, produto_id, quantidade').in('ficha_id', ids)
+      setData(ings || [])
+    }
+
+    buscar()
+
+    const channel = supabase
+      .channel(`ing-all-${organizacaoId}-${Math.random().toString(36).slice(2)}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ficha_ingredientes' }, buscar)
+      .subscribe()
+
+    return () => supabase.removeChannel(channel)
+  }, [organizacaoId])
+
+  return data
+}

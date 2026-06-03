@@ -1,21 +1,29 @@
 import { useState, useRef } from 'react'
-import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoque'
+import { useFichas, useProdutos, useFichaIngredientes, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
+import { registrarProducao, registrarEvento } from '../services/estoque'
+import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
+import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
-const VAZIO = { nome: '', categoria: 'Pizza', descricao: '' }
+const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml']
+const VAZIO_PRATO = { nome: '', categoria: 'Pizza', descricao: '', tipo_ficha: 'prato' }
+const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', unidade: 'kg', rendimento: '' }
 
 export function FichasTecnicas() {
   const fichas = useFichas()
   const produtos = useProdutos()
+  const ingredientes = useTodosIngredientes()
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
+  const [aba, setAba] = useState('prato') // 'prato' | 'producao'
   const [modal, setModal] = useState(null)
   const [detalhe, setDetalhe] = useState(null)
-  const [form, setForm] = useState(VAZIO)
+  const [form, setForm] = useState(VAZIO_PRATO)
   const [busca, setBusca] = useState('')
   const [modalFoto, setModalFoto] = useState(false)
   const [fotoAnalise, setFotoAnalise] = useState(null)
@@ -25,6 +33,7 @@ export function FichasTecnicas() {
   const cameraRefFoto = useRef()
 
   const apiKey = localStorage.getItem('gemini_api_key') || ''
+  const ehProducao = aba === 'producao'
 
   async function analisarFoto(e) {
     const file = e.target.files[0]
@@ -40,7 +49,7 @@ export function FichasTecnicas() {
     setAnalisando(true)
     try {
       const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
-      const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey)
+      const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey, ehProducao ? 'producao' : 'prato')
       setResultadoFoto(res)
     } catch (e) {
       toast.error(e.message || 'Erro ao analisar imagem')
@@ -60,6 +69,7 @@ export function FichasTecnicas() {
         nome: resultadoFoto.nome,
         categoria: resultadoFoto.categoria || 'Pizza',
         descricao: resultadoFoto.descricao || '',
+        tipo_ficha: 'prato',
       })
       .select()
       .single()
@@ -70,6 +80,7 @@ export function FichasTecnicas() {
       let prod = produtos.find(p => p.nome.toLowerCase() === busca)
       if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
       let produtoId = prod?.id
+      let unidadeDestino = prod?.unidade
 
       if (!produtoId) {
         const { data: novo } = await supabase
@@ -78,26 +89,154 @@ export function FichasTecnicas() {
           .select()
           .single()
         produtoId = novo?.id
+        unidadeDestino = ing.unidade || 'un'
+        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
       }
       if (produtoId) {
-        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: ing.quantidade })
+        const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
+        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: qtd })
       }
     }
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: resultadoFoto.nome })
     toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
     setModalFoto(false)
     setFotoAnalise(null)
     setResultadoFoto(null)
   }
 
-  const filtradas = fichas.filter(f => f.nome.toLowerCase().includes(busca.toLowerCase()))
+  async function salvarFichaProducaoFoto() {
+    if (!resultadoFoto) return
+    const orgId = session.organizacaoId
+    const nome = (resultadoFoto.nome || '').trim()
+    if (!nome) return toast.error('Não foi possível identificar o nome do produto gerado')
+    const unidade = UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase())
+      ? resultadoFoto.unidade.toLowerCase() : 'kg'
+    const rendimento = parseFloat(resultadoFoto.rendimento) > 0 ? parseFloat(resultadoFoto.rendimento) : 1
 
-  function abrirNovo() { setForm(VAZIO); setModal('novo') }
-  function abrirEditar(f) { setForm({ ...f }); setModal(f) }
+    // Produto gerado: cria ou reaproveita pelo nome
+    let prodGeradoId
+    const existente = produtos.find(p => p.nome.trim().toLowerCase() === nome.toLowerCase())
+    if (existente) {
+      prodGeradoId = existente.id
+      await supabase.from('produtos').update({ unidade }).eq('id', prodGeradoId)
+    } else {
+      const { data: novo, error: e1 } = await supabase
+        .from('produtos')
+        .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+        .select().single()
+      if (e1) return toast.error(e1.message)
+      prodGeradoId = novo.id
+      await registrarEvento('produto_novo', { produtoId: prodGeradoId, nome })
+    }
+
+    const { data: ficha, error } = await supabase
+      .from('fichas_tecnicas')
+      .insert({
+        organizacao_id: orgId, nome, categoria: 'Produção', descricao: resultadoFoto.descricao || '',
+        tipo_ficha: 'producao', produto_saida_id: prodGeradoId, rendimento,
+      })
+      .select().single()
+    if (error) return toast.error(error.message)
+
+    for (const ing of resultadoFoto.ingredientes || []) {
+      const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
+      let prod = produtos.find(p => p.nome.toLowerCase() === busca)
+      if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
+      let produtoId = prod?.id
+      let unidadeDestino = prod?.unidade
+      if (!produtoId) {
+        const { data: novo } = await supabase
+          .from('produtos')
+          .insert({ organizacao_id: orgId, nome: ing.nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
+          .select().single()
+        produtoId = novo?.id
+        unidadeDestino = ing.unidade || 'un'
+        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
+      }
+      if (produtoId) {
+        const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
+        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: qtd })
+      }
+    }
+
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome })
+    toast.success(`Ficha de produção "${nome}" criada com ${(resultadoFoto.ingredientes || []).length} insumo(s)!`)
+    setModalFoto(false)
+    setFotoAnalise(null)
+    setResultadoFoto(null)
+  }
+
+  const filtradas = fichas.filter(f =>
+    (f.tipo_ficha || 'prato') === aba &&
+    f.nome.toLowerCase().includes(busca.toLowerCase())
+  )
+
+  function trocarAba(novaAba) {
+    setAba(novaAba)
+    setDetalhe(null)
+  }
+
+  function abrirNovo() {
+    setForm(ehProducao ? VAZIO_PRODUCAO : VAZIO_PRATO)
+    setModal('novo')
+  }
+  function abrirEditar(f) {
+    const unidade = produtos.find(p => p.id === f.produto_saida_id)?.unidade || 'kg'
+    setForm({ ...f, produto_saida_id: f.produto_saida_id ?? '', rendimento: f.rendimento ?? '', unidade })
+    setModal(f)
+  }
   function fechar() { setModal(null) }
 
   async function salvar() {
     if (!form.nome.trim()) return toast.error('Nome obrigatório')
-    const data = { nome: form.nome.trim(), categoria: form.categoria, descricao: form.descricao || '' }
+    const tipo = form.tipo_ficha || 'prato'
+    let data
+    if (tipo === 'producao') {
+      if (!form.rendimento || parseFloat(form.rendimento) <= 0) return toast.error('Informe o rendimento (maior que zero)')
+      const nome = form.nome.trim()
+      const unidade = form.unidade || 'kg'
+      const orgId = session.organizacaoId
+
+      // O produto gerado é o próprio nome da ficha — cria no estoque (ou
+      // reaproveita se já existir um produto com o mesmo nome). Na edição,
+      // sincroniza nome/unidade do produto vinculado.
+      let produtoSaidaId = form.produto_saida_id ? parseInt(form.produto_saida_id) : null
+      if (produtoSaidaId) {
+        await supabase.from('produtos').update({ nome, unidade }).eq('id', produtoSaidaId)
+      } else {
+        const existente = produtos.find(p => p.nome.trim().toLowerCase() === nome.toLowerCase())
+        if (existente) {
+          produtoSaidaId = existente.id
+          await supabase.from('produtos').update({ unidade }).eq('id', produtoSaidaId)
+        } else {
+          const { data: novoProd, error: errProd } = await supabase
+            .from('produtos')
+            .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+            .select()
+            .single()
+          if (errProd) return toast.error(errProd.message)
+          produtoSaidaId = novoProd.id
+          await registrarEvento('produto_novo', { produtoId: produtoSaidaId, nome })
+        }
+      }
+
+      data = {
+        nome,
+        categoria: 'Produção',
+        descricao: form.descricao || '',
+        tipo_ficha: 'producao',
+        produto_saida_id: produtoSaidaId,
+        rendimento: parseFloat(form.rendimento),
+      }
+    } else {
+      data = {
+        nome: form.nome.trim(),
+        categoria: form.categoria,
+        descricao: form.descricao || '',
+        tipo_ficha: 'prato',
+      }
+    }
+
     if (modal === 'novo') {
       const { data: ficha, error } = await supabase
         .from('fichas_tecnicas')
@@ -105,23 +244,39 @@ export function FichasTecnicas() {
         .select()
         .single()
       if (error) return toast.error(error.message)
+      await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: data.nome })
       toast.success('Ficha criada!')
       setDetalhe({ ...data, id: ficha.id })
     } else {
       const { error } = await supabase.from('fichas_tecnicas').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
+      await registrarEvento('ficha_editada', { fichaId: modal.id, nome: data.nome })
       toast.success('Ficha atualizada!')
+      setDetalhe(d => (d?.id === modal.id ? { ...d, ...data } : d))
     }
     fechar()
   }
 
-  async function excluir(id) {
+  async function excluir(f) {
+    const ehProd = f.tipo_ficha === 'producao'
     if (!confirm('Excluir esta ficha?')) return
-    await supabase.from('ficha_ingredientes').delete().eq('ficha_id', id)
-    await supabase.from('fichas_tecnicas').delete().eq('id', id)
+    // Remove as linhas da receita desta ficha (não apaga os produtos/insumos).
+    await supabase.from('ficha_ingredientes').delete().eq('ficha_id', f.id)
+    await supabase.from('fichas_tecnicas').delete().eq('id', f.id)
+
+    // Produção: remove o produto gerado SOMENTE se ele não for usado como
+    // insumo em nenhuma outra ficha (assim insumos em uso nunca somem).
+    if (ehProd && f.produto_saida_id) {
+      const { data: usos } = await supabase
+        .from('ficha_ingredientes').select('id').eq('produto_id', f.produto_saida_id).limit(1)
+      if (!usos || usos.length === 0) {
+        await supabase.from('produtos').delete().eq('id', f.produto_saida_id)
+      }
+    }
+    await registrarEvento('ficha_excluida', { nome: f.nome })
     toast.success('Ficha excluída')
     fechar()
-    if (detalhe?.id === id) setDetalhe(null)
+    if (detalhe?.id === f.id) setDetalhe(null)
   }
 
   return (
@@ -134,6 +289,28 @@ export function FichasTecnicas() {
         </div>
       </div>
 
+      {/* Alternância Pratos | Produção */}
+      <div className="flex bg-gray-100 rounded-xl p-1 gap-1 max-w-sm">
+        <button
+          onClick={() => trocarAba('prato')}
+          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${aba === 'prato' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+        >
+          🍕 Pratos
+        </button>
+        <button
+          onClick={() => trocarAba('producao')}
+          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${aba === 'producao' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+        >
+          ⚙️ Produção
+        </button>
+      </div>
+
+      <p className="text-xs text-gray-500">
+        {ehProducao
+          ? 'Receitas de fabricação: ao produzir, consomem insumos e geram um produto para o estoque (ex: massa, molho).'
+          : 'Receitas de pratos vendidos: ao registrar a venda, consomem os ingredientes do estoque.'}
+      </p>
+
       <input
         placeholder="Buscar ficha..."
         value={busca}
@@ -142,45 +319,73 @@ export function FichasTecnicas() {
       />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtradas.map(f => (
-          <div
-            key={f.id}
-            onClick={() => setDetalhe(f)}
-            className={`bg-white border rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow ${detalhe?.id === f.id ? 'border-red-400 ring-1 ring-red-300' : 'border-gray-200'}`}
-          >
-            <div className="flex items-start justify-between">
-              <div>
-                <p className="font-semibold text-gray-800">{f.nome}</p>
-                {f.descricao && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{f.descricao}</p>}
+        {filtradas.map(f => {
+          const prodGerado = produtos.find(p => p.id === f.produto_saida_id)
+          return (
+            <div
+              key={f.id}
+              onClick={() => setDetalhe(f)}
+              className={`bg-white border rounded-xl p-4 cursor-pointer hover:shadow-md transition-shadow ${detalhe?.id === f.id ? 'border-red-400 ring-1 ring-red-300' : 'border-gray-200'}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-gray-800">{f.nome}</p>
+                  {f.tipo_ficha === 'producao'
+                    ? <p className="text-xs text-gray-500 mt-1">Rende {f.rendimento || '—'} {prodGerado?.unidade || ''}/lote</p>
+                    : (f.descricao && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{f.descricao}</p>)
+                  }
+                </div>
+                <Badge color={f.tipo_ficha === 'producao' ? 'blue' : 'orange'}>
+                  {f.tipo_ficha === 'producao' ? 'Produção' : f.categoria}
+                </Badge>
               </div>
-              <Badge color="orange">{f.categoria}</Badge>
+              <div className="flex gap-2 mt-3">
+                <button onClick={e => { e.stopPropagation(); abrirEditar(f) }} className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
+                <button onClick={e => { e.stopPropagation(); excluir(f) }} className="text-xs text-red-500 hover:text-red-700">Excluir</button>
+              </div>
             </div>
-            <div className="flex gap-2 mt-3">
-              <button onClick={e => { e.stopPropagation(); abrirEditar(f) }} className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
-              <button onClick={e => { e.stopPropagation(); excluir(f.id) }} className="text-xs text-red-500 hover:text-red-700">Excluir</button>
-            </div>
-          </div>
-        ))}
+          )
+        })}
         {filtradas.length === 0 && (
           <p className="text-gray-400 text-sm col-span-full text-center py-8">Nenhuma ficha encontrada.</p>
         )}
       </div>
 
-      {detalhe && <DetalheIngredientes ficha={detalhe} />}
+      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} />}
 
       {modal && (
-        <Modal title={modal === 'novo' ? 'Nova Ficha Técnica' : 'Editar Ficha'} onClose={fechar}>
+        <Modal title={modal === 'novo' ? (form.tipo_ficha === 'producao' ? 'Nova Ficha de Produção' : 'Nova Ficha de Prato') : 'Editar Ficha'} onClose={fechar}>
           <div className="space-y-3">
             <div>
-              <label className="label">Nome *</label>
-              <input className="input" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Ex: Pizza Margherita" />
+              <label className="label">{form.tipo_ficha === 'producao' ? 'Nome do produto gerado *' : 'Nome *'}</label>
+              <input className="input" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder={form.tipo_ficha === 'producao' ? 'Ex: Massa de Pizza' : 'Ex: Pizza Margherita'} />
+              {form.tipo_ficha === 'producao' && (
+                <p className="text-xs text-gray-400 mt-1">Este produto será criado no estoque automaticamente.</p>
+              )}
             </div>
-            <div>
-              <label className="label">Categoria</label>
-              <select className="input" value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
-                {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
-              </select>
-            </div>
+
+            {form.tipo_ficha === 'producao' ? (
+              <>
+                <div>
+                  <label className="label">Unidade do produto gerado *</label>
+                  <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                    {UNIDADES_PRODUCAO.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Rendimento por lote *</label>
+                  <input type="number" min="0.001" step="0.001" className="input" value={form.rendimento} onChange={e => setForm(f => ({ ...f, rendimento: e.target.value }))} placeholder={`Ex: 5 (${form.unidade || 'kg'} por produção)`} />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="label">Categoria</label>
+                <select className="input" value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
+                  {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+            )}
+
             <div>
               <label className="label">Descrição</label>
               <textarea className="input resize-none" rows={3} value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} placeholder="Descrição opcional..." />
@@ -217,10 +422,16 @@ export function FichasTecnicas() {
               <div className="space-y-3">
                 <div className="bg-gray-50 rounded-lg p-3 space-y-2">
                   <p className="font-semibold text-gray-800">{resultadoFoto.nome}</p>
+                  {ehProducao && (
+                    <p className="text-xs text-gray-600">
+                      Produz em <strong>{UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase()) ? resultadoFoto.unidade.toLowerCase() : 'kg'}</strong>
+                      {' '}· rende <strong>{parseFloat(resultadoFoto.rendimento) > 0 ? resultadoFoto.rendimento : 1}</strong> por lote
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500">{resultadoFoto.descricao}</p>
                   {resultadoFoto.observacao && <p className="text-xs text-yellow-700">⚠️ {resultadoFoto.observacao}</p>}
                 </div>
-                <p className="text-xs font-medium text-gray-500 uppercase">Ingredientes identificados</p>
+                <p className="text-xs font-medium text-gray-500 uppercase">{ehProducao ? 'Insumos identificados' : 'Ingredientes identificados'}</p>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {resultadoFoto.ingredientes.map((ing, i) => {
                     const prod = produtos.find(p => p.nome.toLowerCase() === (ing.nomeCadastrado || '').toLowerCase())
@@ -235,8 +446,8 @@ export function FichasTecnicas() {
                     )
                   })}
                 </div>
-                <button onClick={salvarFichaFoto} className="btn-primary w-full">
-                  ✅ Criar Ficha com {resultadoFoto.ingredientes.length} ingrediente(s)
+                <button onClick={ehProducao ? salvarFichaProducaoFoto : salvarFichaFoto} className="btn-primary w-full">
+                  ✅ Criar Ficha com {resultadoFoto.ingredientes.length} {ehProducao ? 'insumo(s)' : 'ingrediente(s)'}
                 </button>
               </div>
             )}
@@ -247,10 +458,19 @@ export function FichasTecnicas() {
   )
 }
 
-function DetalheIngredientes({ ficha }) {
+function DetalheIngredientes({ ficha, custoUnit }) {
   const produtos = useProdutos()
   const ingredientes = useFichaIngredientes(ficha.id)
   const [form, setForm] = useState({ produtoId: '', quantidade: '' })
+  const [lotes, setLotes] = useState('')
+  const [produzindo, setProduzindo] = useState(false)
+
+  const ehProducao = ficha.tipo_ficha === 'producao'
+  const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
+
+  // Custo total dos insumos desta ficha (resolve produtos de produção também)
+  const custoTotal = ingredientes.reduce((s, ing) => s + (ing.quantidade || 0) * (custoUnit ? custoUnit(ing.produto_id) : 0), 0)
+  const custoPorUnidade = ehProducao && ficha.rendimento > 0 ? custoTotal / ficha.rendimento : 0
 
   async function adicionar() {
     if (!form.produtoId || !form.quantidade) return toast.error('Preencha produto e quantidade')
@@ -270,11 +490,52 @@ function DetalheIngredientes({ ficha }) {
     await supabase.from('ficha_ingredientes').delete().eq('id', id)
   }
 
+  async function produzir() {
+    if (ingredientes.length === 0) return toast.error('Adicione os insumos antes de produzir')
+    setProduzindo(true)
+    try {
+      const gerado = await registrarProducao(ficha.id, lotes)
+      toast.success(`Produzido! +${gerado} ${prodGerado?.unidade || ''} de ${prodGerado?.nome || 'produto'}`)
+      setLotes('')
+    } catch (e) {
+      toast.error(e.message || 'Erro ao produzir', { duration: 6000 })
+    } finally {
+      setProduzindo(false)
+    }
+  }
+
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4">
-      <h2 className="font-semibold text-gray-800 mb-4">
-        Ingredientes — <span className="text-red-600">{ficha.nome}</span>
+      <h2 className="font-semibold text-gray-800 mb-1">
+        {ehProducao ? 'Insumos' : 'Ingredientes'} — <span className="text-red-600">{ficha.nome}</span>
       </h2>
+      {!ehProducao && (
+        <p className="text-sm text-gray-600 mb-4">Custo da ficha: <strong className="text-gray-800">{formatBRL(custoTotal)}</strong></p>
+      )}
+      {ehProducao && <div className="mb-4" />}
+
+      {ehProducao && (
+        <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+          <p className="text-sm text-gray-700">
+            Gera <strong>{prodGerado?.nome || '—'}</strong>
+            {ficha.rendimento ? <> — rende <strong>{ficha.rendimento} {prodGerado?.unidade || ''}</strong> por lote</> : ' — defina o rendimento'}
+          </p>
+          <p className="text-sm text-gray-700">
+            Custo por lote: <strong className="text-gray-800">{formatBRL(custoTotal)}</strong>
+            {ficha.rendimento > 0 && <> · por {prodGerado?.unidade || 'un'}: <strong className="text-gray-800">{formatBRL(custoPorUnidade)}</strong></>}
+          </p>
+          <div className="flex gap-2 items-end">
+            <div>
+              <label className="label">Lotes a produzir</label>
+              <input type="number" min="1" step="1" className="input w-28" placeholder="Ex: 1" value={lotes} onChange={e => setLotes(e.target.value)} />
+            </div>
+            <button onClick={produzir} disabled={produzindo} className="btn-primary disabled:opacity-50">
+              {produzindo ? 'Produzindo...' : '⚙️ Produzir'}
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">Consome os insumos abaixo e adiciona {prodGerado?.nome || 'o produto'} ao estoque.</p>
+        </div>
+      )}
 
       <div className="flex gap-2 mb-4 flex-wrap">
         <select
@@ -282,7 +543,7 @@ function DetalheIngredientes({ ficha }) {
           value={form.produtoId}
           onChange={e => setForm(f => ({ ...f, produtoId: e.target.value }))}
         >
-          <option value="">Selecionar produto...</option>
+          <option value="">Selecionar {ehProducao ? 'insumo' : 'produto'}...</option>
           {produtos.map(p => <option key={p.id} value={p.id}>{p.nome} ({p.unidade})</option>)}
         </select>
         <input
@@ -296,12 +557,12 @@ function DetalheIngredientes({ ficha }) {
       </div>
 
       {ingredientes.length === 0 ? (
-        <p className="text-gray-400 text-sm">Nenhum ingrediente cadastrado ainda.</p>
+        <p className="text-gray-400 text-sm">Nenhum {ehProducao ? 'insumo' : 'ingrediente'} cadastrado ainda.</p>
       ) : (
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-gray-500 text-xs">
             <tr>
-              <th className="text-left px-3 py-2">Ingrediente</th>
+              <th className="text-left px-3 py-2">{ehProducao ? 'Insumo' : 'Ingrediente'}</th>
               <th className="text-right px-3 py-2">Qtd</th>
               <th className="px-3 py-2"></th>
             </tr>

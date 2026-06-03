@@ -1,18 +1,24 @@
 import { useState, useRef } from 'react'
-import { useProdutos } from '../hooks/useEstoque'
+import { useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
+import { fatorUnidade, converterUnidade } from '../lib/unidades'
+import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
+import { registrarEvento } from '../services/estoque'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
-const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0 }
+const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0, preco: 0 }
 
 export function Estoque() {
   const produtos = useProdutos()
+  const fichas = useFichas()
+  const ingredientes = useTodosIngredientes()
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState(VAZIO)
   const [busca, setBusca] = useState('')
@@ -47,8 +53,10 @@ export function Estoque() {
   async function excluirSelecionados() {
     if (selecionados.size === 0) return
     if (!confirm(`Excluir ${selecionados.size} produto(s) selecionado(s)?`)) return
+    const alvos = produtos.filter(p => selecionados.has(p.id))
     const { error } = await supabase.from('produtos').delete().in('id', [...selecionados])
     if (error) return toast.error('Erro ao excluir')
+    for (const p of alvos) await registrarEvento('produto_excluido', { nome: p.nome })
     setSelecionados(new Set())
     toast.success(`${selecionados.size} produto(s) excluído(s)!`)
   }
@@ -65,22 +73,42 @@ export function Estoque() {
       unidade: form.unidade,
       quantidade: parseFloat(form.quantidade) || 0,
       estoque_minimo: parseFloat(form.estoque_minimo) || 0,
+      preco: parseFloat(form.preco) || 0,
     }
     if (modal === 'novo') {
-      const { error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId })
+      const { data: novo, error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId }).select().single()
       if (error) return toast.error(error.message)
+      await registrarEvento('produto_novo', { produtoId: novo?.id, nome: data.nome })
       toast.success('Produto adicionado!')
     } else {
       const { error } = await supabase.from('produtos').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
+      await registrarEvento('produto_editado', { produtoId: modal.id, nome: data.nome })
+
+      // Se a unidade mudou (entre compatíveis), converte as quantidades usadas
+      // deste produto nas fichas técnicas, para manterem o valor real.
+      const fator = fatorUnidade(modal.unidade, form.unidade)
+      if (modal.unidade !== form.unidade && fator !== 1) {
+        const { data: ings } = await supabase
+          .from('ficha_ingredientes')
+          .select('id, quantidade')
+          .eq('produto_id', modal.id)
+        for (const ing of ings || []) {
+          await supabase
+            .from('ficha_ingredientes')
+            .update({ quantidade: Math.round(ing.quantidade * fator * 1000) / 1000 })
+            .eq('id', ing.id)
+        }
+      }
       toast.success('Produto atualizado!')
     }
     fechar()
   }
 
-  async function excluir(id) {
+  async function excluir(p) {
     if (!confirm('Excluir este produto?')) return
-    await supabase.from('produtos').delete().eq('id', id)
+    await supabase.from('produtos').delete().eq('id', p.id)
+    await registrarEvento('produto_excluido', { nome: p.nome })
     toast.success('Produto excluído')
     fechar()
   }
@@ -197,7 +225,21 @@ export function Estoque() {
               </div>
               <div>
                 <label className="label">Unidade</label>
-                <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                <select
+                  className="input"
+                  value={form.unidade}
+                  onChange={e => {
+                    const nova = e.target.value
+                    setForm(f => ({
+                      ...f,
+                      unidade: nova,
+                      // Converte os valores exibidos quando a troca é entre
+                      // unidades compatíveis (kg↔g, l↔ml). Senão, mantém.
+                      quantidade: converterUnidade(f.quantidade, f.unidade, nova),
+                      estoque_minimo: converterUnidade(f.estoque_minimo, f.unidade, nova),
+                    }))
+                  }}
+                >
                   {UNIDADES.map(u => <option key={u}>{u}</option>)}
                 </select>
               </div>
@@ -212,10 +254,24 @@ export function Estoque() {
                 <input type="number" min="0" step="0.01" className="input" value={form.estoque_minimo} onChange={e => setForm(f => ({ ...f, estoque_minimo: e.target.value }))} />
               </div>
             </div>
+            {modal !== 'novo' && ehProdutoDeProducao(modal.id, fichas) ? (
+              <div>
+                <label className="label">Custo (calculado pela ficha de produção)</label>
+                <div className="input bg-gray-50 text-gray-600">
+                  {formatBRL(custoUnit(modal.id))} <span className="text-xs text-gray-400">/ {form.unidade}</span>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Soma dos insumos ÷ rendimento. Ajuste os preços dos insumos para alterar.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="label">Preço de custo (R$ por {form.unidade})</label>
+                <input type="number" min="0" step="0.01" className="input" placeholder="Ex: 4.50" value={form.preco} onChange={e => setForm(f => ({ ...f, preco: e.target.value }))} />
+              </div>
+            )}
             <div className="flex gap-2 pt-2">
               <button onClick={salvar} className="btn-primary flex-1">Salvar</button>
               {modal !== 'novo' && (
-                <button onClick={() => excluir(modal.id)} className="btn-danger">Excluir</button>
+                <button onClick={() => excluir(modal)} className="btn-danger">Excluir</button>
               )}
             </div>
           </div>
