@@ -88,8 +88,8 @@ export function Dashboard() {
             {lancamentos.slice(0, 10).map(l => (
               <div key={l.id} className="flex items-center justify-between text-sm py-1 border-b border-gray-100 last:border-0">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Badge color={l.tipo === 'entrada' ? 'green' : 'red'}>
-                    {l.tipo === 'entrada' ? '+ Entrada' : l.tipo === 'saida_ficha' ? '- Ficha' : '- Manual'}
+                  <Badge color={l.tipo === 'entrada' ? 'green' : l.tipo === 'ajuste' ? 'blue' : 'red'}>
+                    {l.tipo === 'entrada' ? '+ Entrada' : l.tipo === 'ajuste' ? '± Ajuste' : l.tipo === 'saida_ficha' ? '- Ficha' : '- Manual'}
                   </Badge>
                   <span className="text-gray-700 truncate">{l.nomeFicha || l.nomeProduto}</span>
                 </div>

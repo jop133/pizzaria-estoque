@@ -49,7 +49,7 @@ export function Login() {
     if (!nome.trim()) return toast.error('Informe seu nome')
     setLoading(true)
     try {
-      await registrar(email, senha, nome.trim())
+      await registrar(email, senha)
       setModo('criar_org')
     } catch (err) {
       toast.error(err.message)

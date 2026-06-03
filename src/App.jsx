@@ -3,7 +3,7 @@ import { Toaster } from 'react-hot-toast'
 import toast from 'react-hot-toast'
 import {
   Home, Package, PencilLine, Camera, History,
-  ClipboardList, BarChart3, Settings, LogOut, Menu, AlertTriangle, ShoppingCart,
+  ClipboardList, BarChart3, Settings, LogOut, Menu, AlertTriangle, ShoppingCart, ClipboardCheck,
 } from 'lucide-react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { Login } from './pages/Login'
@@ -16,6 +16,7 @@ import { Relatorios } from './pages/Relatorios'
 import { ImportarFoto } from './pages/ImportarFoto'
 import { Configuracoes } from './pages/Configuracoes'
 import { ListaCompras } from './pages/ListaCompras'
+import { ContagemEstoque } from './pages/ContagemEstoque'
 import { useProdutosAbaixoMinimo } from './hooks/useEstoque'
 
 // Definição central das telas
@@ -27,6 +28,7 @@ const ABAS = {
   foto: { label: 'Foto IA', Icon: Camera },
   historico: { label: 'Histórico', Icon: History },
   fichas: { label: 'Fichas Técnicas', Icon: ClipboardList },
+  contagem: { label: 'Contagem', Icon: ClipboardCheck },
   relatorios: { label: 'Relatórios', Icon: BarChart3 },
   config: { label: 'Configurações', Icon: Settings },
 }
@@ -34,7 +36,7 @@ const ABAS = {
 // Grupos exibidos no menu lateral
 const GRUPOS = [
   { titulo: 'Principal', itens: ['dashboard', 'estoque', 'compras', 'lancamentos', 'foto', 'historico'] },
-  { titulo: 'Gestão', itens: ['fichas', 'relatorios'] },
+  { titulo: 'Gestão', itens: ['fichas', 'contagem', 'relatorios'] },
   { titulo: 'Conta', itens: ['config'] },
 ]
 
@@ -82,6 +84,7 @@ function AppInner() {
       case 'estoque': return <Estoque />
       case 'compras': return <ListaCompras />
       case 'fichas': return <FichasTecnicas />
+      case 'contagem': return <ContagemEstoque />
       case 'lancamentos': return <Lancamentos />
       case 'historico': return <Historico />
       case 'relatorios': return <Relatorios />

@@ -76,8 +76,8 @@ export function AuthProvider({ children }) {
     if (error) throw new Error(error.message)
   }
 
-  // Apenas cria a conta — organização é criada separadamente
-  async function registrar(email, senha, nome) {
+  // Apenas cria a conta — organização (e nome do usuário) são definidos depois
+  async function registrar(email, senha) {
     bloqueandoRef.current = true
     try {
       const { data, error } = await supabase.auth.signUp({ email, password: senha })
