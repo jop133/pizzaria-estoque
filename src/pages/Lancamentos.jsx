@@ -2,6 +2,7 @@ import { useState, useRef } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { registrarSaidaFicha, registrarSaidaManual, registrarEntrada } from '../services/estoque'
 import { analisarImagemEstoque, prepararImagem } from '../services/geminiVision'
+import { expandirArquivosParaImagens } from '../lib/arquivos'
 import toast from 'react-hot-toast'
 
 const TIPOS = [
@@ -26,10 +27,25 @@ export function Lancamentos() {
   const apiKey = localStorage.getItem('gemini_api_key') || ''
 
   async function selecionarFoto(e) {
-    const file = e.target.files[0]
-    if (!file) return
+    const original = e.target.files[0]
     e.target.value = ''
+    if (!original) return
     if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
+
+    let file = original
+    if (original.type === 'application/pdf' || /\.pdf$/i.test(original.name)) {
+      const t = toast.loading('Lendo arquivo...')
+      try {
+        const imgs = await expandirArquivosParaImagens([original], true)
+        file = imgs[0]
+      } catch {
+        toast.error('Não foi possível ler o PDF.')
+        return
+      } finally {
+        toast.dismiss(t)
+      }
+      if (!file) return
+    }
 
     setPreviewFoto(URL.createObjectURL(file))
     setAnalisandoFoto(true)
@@ -141,7 +157,7 @@ export function Lancamentos() {
           </button>
         </div>
 
-        <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={selecionarFoto} />
+        <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={selecionarFoto} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={selecionarFoto} />
 
         {previewFoto && (
