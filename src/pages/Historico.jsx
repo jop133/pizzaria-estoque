@@ -66,12 +66,15 @@ export function Historico() {
   }
 
   async function excluirUm(l) {
-    if (!confirm('Excluir este lançamento? A ação será revertida no estoque.')) return
+    const aviso = ehCadastro(l.tipo)
+      ? 'Este é um registro de cadastro — excluí-lo NÃO desfaz a ação (o produto/ficha não muda), apenas remove a linha do histórico. Continuar?'
+      : 'Excluir este lançamento? A ação será revertida no estoque.'
+    if (!confirm(aviso)) return
     try {
       await reverterLancamento(l)
       const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
       if (error) throw new Error(error.message)
-      toast.success('Lançamento excluído e revertido')
+      toast.success(ehCadastro(l.tipo) ? 'Registro removido do histórico' : 'Lançamento excluído e revertido')
     } catch (e) {
       toast.error(e.message || 'Erro ao excluir')
     }
@@ -79,14 +82,19 @@ export function Historico() {
 
   async function excluirSelecionados() {
     if (selecionados.size === 0) return
-    if (!confirm(`Excluir ${selecionados.size} lançamento(s)? As ações serão revertidas no estoque.`)) return
+    const alvos = lancamentos.filter(l => selecionados.has(l.id))
+    const temMov = alvos.some(l => !ehCadastro(l.tipo))
+    const temCad = alvos.some(l => ehCadastro(l.tipo))
+    let aviso = `Excluir ${selecionados.size} lançamento(s)?`
+    if (temMov) aviso += ' As movimentações serão revertidas no estoque.'
+    if (temCad) aviso += ' Os registros de cadastro NÃO serão desfeitos (apenas saem do histórico).'
+    if (!confirm(aviso)) return
     try {
-      const alvos = lancamentos.filter(l => selecionados.has(l.id))
       for (const l of alvos) await reverterLancamento(l)
       const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
       if (error) throw new Error(error.message)
       setSelecionados(new Set())
-      toast.success(`${selecionados.size} lançamento(s) excluído(s) e revertido(s)!`)
+      toast.success(`${selecionados.size} lançamento(s) excluído(s)!`)
     } catch (e) {
       toast.error(e.message || 'Erro ao excluir')
     }
@@ -193,7 +201,7 @@ export function Historico() {
                     <button
                       onClick={() => excluirUm(l)}
                       className="text-gray-300 hover:text-red-500 transition-colors"
-                      title="Excluir e reverter"
+                      title="Excluir"
                     >✕</button>
                   </td>
                 </tr>
