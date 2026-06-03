@@ -1,16 +1,34 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useLancamentos } from '../hooks/useEstoque'
+import { useAuth } from '../contexts/AuthContext'
 import { exportarHistoricoCSV } from '../services/importExport'
+import { reverterLancamento } from '../services/estoque'
 import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
 export function Historico() {
   const lancamentos = useLancamentos()
+  const { organizacaoId } = useAuth()
   const [filtroTipo, setFiltroTipo] = useState('')
   const [busca, setBusca] = useState('')
   const [periodo, setPeriodo] = useState('todos')
   const [selecionados, setSelecionados] = useState(new Set())
+  const [membrosMap, setMembrosMap] = useState({})
+
+  // Mapa user_id -> nome (para mostrar quem fez cada ação)
+  useEffect(() => {
+    if (!organizacaoId) return
+    supabase
+      .from('membros')
+      .select('user_id, nome, email')
+      .eq('organizacao_id', organizacaoId)
+      .then(({ data }) => {
+        const m = {}
+        for (const x of data || []) m[x.user_id] = x.nome || x.email || '—'
+        setMembrosMap(m)
+      })
+  }, [organizacaoId])
 
   const filtrados = lancamentos.filter(l => {
     const okTipo = !filtroTipo || l.tipo === filtroTipo
@@ -43,13 +61,30 @@ export function Historico() {
     }
   }
 
+  async function excluirUm(l) {
+    if (!confirm('Excluir este lançamento? A ação será revertida no estoque.')) return
+    try {
+      await reverterLancamento(l)
+      await supabase.from('lancamentos').delete().eq('id', l.id)
+      toast.success('Lançamento excluído e revertido')
+    } catch {
+      toast.error('Erro ao excluir')
+    }
+  }
+
   async function excluirSelecionados() {
     if (selecionados.size === 0) return
-    if (!confirm(`Excluir ${selecionados.size} lançamento(s) selecionado(s)? O estoque não será revertido.`)) return
-    const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
-    if (error) return toast.error('Erro ao excluir')
-    setSelecionados(new Set())
-    toast.success(`${selecionados.size} lançamento(s) excluído(s)!`)
+    if (!confirm(`Excluir ${selecionados.size} lançamento(s)? As ações serão revertidas no estoque.`)) return
+    try {
+      const alvos = lancamentos.filter(l => selecionados.has(l.id))
+      for (const l of alvos) await reverterLancamento(l)
+      const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
+      if (error) return toast.error('Erro ao excluir')
+      setSelecionados(new Set())
+      toast.success(`${selecionados.size} lançamento(s) excluído(s) e revertido(s)!`)
+    } catch {
+      toast.error('Erro ao excluir')
+    }
   }
 
   const tipoBadge = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', ajuste: 'blue', producao: 'yellow' }
@@ -109,6 +144,7 @@ export function Historico() {
                 <th className="text-left px-4 py-3">Tipo</th>
                 <th className="text-left px-4 py-3">Item</th>
                 <th className="text-right px-4 py-3">Qtd</th>
+                <th className="text-left px-4 py-3 hidden sm:table-cell">Por</th>
                 <th className="text-left px-4 py-3 hidden md:table-cell">Obs.</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -133,12 +169,13 @@ export function Historico() {
                     {l.marca && <span className="ml-1 text-xs text-gray-400 font-normal">· {l.marca}</span>}
                   </td>
                   <td className="px-4 py-3 text-right font-mono">{l.quantidade}</td>
+                  <td className="px-4 py-3 text-gray-500 text-xs hidden sm:table-cell">{membrosMap[l.user_id] || '—'}</td>
                   <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{l.observacao || '—'}</td>
                   <td className="px-4 py-3 text-right">
                     <button
-                      onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Removido') }}
+                      onClick={() => excluirUm(l)}
                       className="text-gray-300 hover:text-red-500 transition-colors"
-                      title="Excluir"
+                      title="Excluir e reverter"
                     >✕</button>
                   </td>
                 </tr>

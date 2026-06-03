@@ -60,6 +60,58 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
   })
 }
 
+// Ajusta o estoque de um produto por um delta (+ entra, − sai), nunca negativo.
+async function ajustarEstoque(produtoId, delta) {
+  if (!produtoId) return
+  const { data: prod } = await supabase.from('produtos').select('quantidade').eq('id', produtoId).single()
+  if (!prod) return
+  await supabase
+    .from('produtos')
+    .update({ quantidade: Math.max(0, (prod.quantidade || 0) + delta) })
+    .eq('id', produtoId)
+}
+
+// Reverte o efeito de um lançamento no estoque (usado ao excluí-lo do histórico).
+// Assume que nada mudou desde a ação; receitas usam a versão atual da ficha.
+export async function reverterLancamento(l) {
+  if (!l) return
+  const qtd = l.quantidade || 0
+
+  if (l.tipo === 'entrada') {
+    await ajustarEstoque(l.produto_id, -qtd)
+  } else if (l.tipo === 'saida_manual') {
+    await ajustarEstoque(l.produto_id, +qtd)
+  } else if (l.tipo === 'saida_ficha') {
+    if (l.ficha_id) {
+      const { data: ings } = await supabase
+        .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
+      for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * qtd)
+    }
+  } else if (l.tipo === 'producao') {
+    // remove o produto gerado
+    await ajustarEstoque(l.produto_id, -qtd)
+    // devolve os insumos consumidos (recalcula os lotes pela receita atual)
+    if (l.ficha_id) {
+      const { data: ficha } = await supabase
+        .from('fichas_tecnicas').select('rendimento').eq('id', l.ficha_id).single()
+      const rendimento = ficha?.rendimento
+      if (rendimento && rendimento > 0) {
+        const lotes = qtd / rendimento
+        const { data: ings } = await supabase
+          .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
+        for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * lotes)
+      }
+    }
+  } else if (l.tipo === 'ajuste') {
+    // desfaz a diferença aplicada, lida da observação "... (±Δ)"
+    const m = (l.observacao || '').match(/\(([+-]?\d+(?:[.,]\d+)?)\)/)
+    if (m) {
+      const delta = parseFloat(m[1].replace(',', '.'))
+      if (!isNaN(delta)) await ajustarEstoque(l.produto_id, -delta)
+    }
+  }
+}
+
 // Produção (ficha de produção): consome os insumos e adiciona o produto gerado
 // ao estoque. Registra um lançamento tipo 'producao' para o produto gerado.
 export async function registrarProducao(fichaId, lotes, observacao = '') {
