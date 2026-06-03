@@ -19,15 +19,18 @@ export function Dashboard() {
   const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
   const valorPorCategoria = {}
   let valorTotal = 0
+  const valorProdutos = []
   for (const p of produtos) {
     const v = (p.quantidade || 0) * custoUnit(p.id)
     if (v > 0) {
       valorTotal += v
       const cat = p.categoria || 'Outros'
       valorPorCategoria[cat] = (valorPorCategoria[cat] || 0) + v
+      valorProdutos.push({ id: p.id, nome: p.nome, valor: v })
     }
   }
   const valorCategorias = Object.entries(valorPorCategoria).sort((a, b) => b[1] - a[1])
+  valorProdutos.sort((a, b) => b.valor - a.valor)
 
   const ultimos7dias = lancamentos.filter(l => {
     const d = new Date(l.data)
@@ -101,14 +104,27 @@ export function Dashboard() {
         {valorCategorias.length === 0 ? (
           <p className="text-gray-400 text-sm">Cadastre o preço de custo dos produtos para ver o valor.</p>
         ) : (
-          <div className="space-y-1">
-            {valorCategorias.map(([cat, v]) => (
-              <div key={cat} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
-                <span className="text-gray-600">{cat}</span>
-                <span className="font-mono text-gray-800">{formatBRL(v)}</span>
-              </div>
-            ))}
-          </div>
+          <>
+            <p className="text-xs font-medium text-gray-500 uppercase mb-1">Por categoria</p>
+            <div className="space-y-1 mb-4">
+              {valorCategorias.map(([cat, v]) => (
+                <div key={cat} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
+                  <span className="text-gray-600">{cat}</span>
+                  <span className="font-mono text-gray-800">{formatBRL(v)}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-xs font-medium text-gray-500 uppercase mb-1">Por produto</p>
+            <div className="space-y-1 max-h-72 overflow-y-auto">
+              {valorProdutos.map(x => (
+                <div key={x.id} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
+                  <span className="text-gray-600 truncate pr-2">{x.nome}</span>
+                  <span className="font-mono text-gray-800 shrink-0">{formatBRL(x.valor)}</span>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
