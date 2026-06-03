@@ -9,6 +9,12 @@ import toast from 'react-hot-toast'
 
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
 const tipoCor = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', desconhecido: 'gray' }
+// Finalidade do lote de fotos (escolhida pelo usuário)
+const TIPOS_FOTO = [
+  { value: 'entrada', label: '✅ Entrada (compra/reposição)' },
+  { value: 'saida_ficha', label: '🍕 Saída por Ficha (venda)' },
+  { value: 'saida_manual', label: '📦 Saída Manual (descarte/uso)' },
+]
 const UNIDADES_PESO = ['kg', 'g', 'l', 'ml']
 // Unidades oferecidas ao criar um produto novo (contagem + peso direto)
 const UNIDADES_NOVO = ['un', 'pct', 'cx', 'dz', 'fardo', 'saco', 'lata', 'bandeja', 'kg', 'g', 'l', 'ml']
@@ -28,6 +34,7 @@ export function ImportarFoto() {
 
   const [fila, setFila] = useState([])
   const [confirmando, setConfirmando] = useState(false)
+  const [tipoLote, setTipoLote] = useState('entrada') // finalidade escolhida para as fotos
 
   const fileRef = useRef()
   const cameraRef = useRef()
@@ -235,6 +242,7 @@ export function ImportarFoto() {
       try {
         const { base64, mimeType } = await prepararImagem(foto.file)
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
+        res.tipo = tipoLote // finalidade definida pelo usuário (não depende da IA)
         analisadas.push({ fotoId: foto.id, res })
       } catch (e) {
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'erro', erro: e.message } : f))
@@ -390,6 +398,26 @@ export function ImportarFoto() {
           <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
         </div>
       )}
+
+      <div className="space-y-2">
+        <p className="text-sm font-medium text-gray-700">Finalidade das fotos</p>
+        <div className="grid grid-cols-1 gap-2">
+          {TIPOS_FOTO.map(t => (
+            <button
+              key={t.value}
+              onClick={() => setTipoLote(t.value)}
+              className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
+                tipoLote === t.value
+                  ? 'border-red-700 bg-red-50 text-red-800'
+                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-400">Vale para todas as fotos da fila. Para tipos diferentes, faça em lotes separados.</p>
+      </div>
 
       <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
         <p className="text-4xl">📷</p>
