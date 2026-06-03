@@ -4,27 +4,13 @@ import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
 import { registrarProducao } from '../services/estoque'
+import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
 const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml']
-
-// Converte uma quantidade lida (na unidade da receita) para a unidade do
-// produto cadastrado. g≡ml e kg≡l usam aproximação de densidade 1 (padrão de
-// cozinha). Ex.: 80 ml de um produto em kg -> 0,08 kg. Unidades fora dessa
-// tabela (un, pct, cx...) ficam como estão.
-const BASE_UNIDADE = { g: 1, ml: 1, kg: 1000, l: 1000 }
-function converterParaUnidadeProduto(qtd, unidadeLida, unidadeProduto) {
-  const de = (unidadeLida || '').toLowerCase()
-  const para = (unidadeProduto || '').toLowerCase()
-  if (!de || de === para) return qtd
-  if (BASE_UNIDADE[de] && BASE_UNIDADE[para]) {
-    return Math.round(qtd * (BASE_UNIDADE[de] / BASE_UNIDADE[para]) * 1000) / 1000
-  }
-  return qtd
-}
 const VAZIO_PRATO = { nome: '', categoria: 'Pizza', descricao: '', tipo_ficha: 'prato' }
 const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', unidade: 'kg', rendimento: '' }
 

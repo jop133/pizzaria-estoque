@@ -3,6 +3,7 @@ import { useProdutos } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
+import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -73,6 +74,22 @@ export function Estoque() {
     } else {
       const { error } = await supabase.from('produtos').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
+
+      // Se a unidade mudou (entre compatíveis), converte as quantidades usadas
+      // deste produto nas fichas técnicas, para manterem o valor real.
+      const fator = fatorUnidade(modal.unidade, form.unidade)
+      if (modal.unidade !== form.unidade && fator !== 1) {
+        const { data: ings } = await supabase
+          .from('ficha_ingredientes')
+          .select('id, quantidade')
+          .eq('produto_id', modal.id)
+        for (const ing of ings || []) {
+          await supabase
+            .from('ficha_ingredientes')
+            .update({ quantidade: Math.round(ing.quantidade * fator * 1000) / 1000 })
+            .eq('id', ing.id)
+        }
+      }
       toast.success('Produto atualizado!')
     }
     fechar()
@@ -197,7 +214,21 @@ export function Estoque() {
               </div>
               <div>
                 <label className="label">Unidade</label>
-                <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                <select
+                  className="input"
+                  value={form.unidade}
+                  onChange={e => {
+                    const nova = e.target.value
+                    setForm(f => ({
+                      ...f,
+                      unidade: nova,
+                      // Converte os valores exibidos quando a troca é entre
+                      // unidades compatíveis (kg↔g, l↔ml). Senão, mantém.
+                      quantidade: converterUnidade(f.quantidade, f.unidade, nova),
+                      estoque_minimo: converterUnidade(f.estoque_minimo, f.unidade, nova),
+                    }))
+                  }}
+                >
                   {UNIDADES.map(u => <option key={u}>{u}</option>)}
                 </select>
               </div>
