@@ -183,13 +183,21 @@ export function FichasTecnicas() {
     fechar()
   }
 
-  async function excluir(id) {
-    if (!confirm('Excluir esta ficha?')) return
-    await supabase.from('ficha_ingredientes').delete().eq('ficha_id', id)
-    await supabase.from('fichas_tecnicas').delete().eq('id', id)
+  async function excluir(f) {
+    const ehProd = f.tipo_ficha === 'producao'
+    const msg = ehProd
+      ? `Excluir a ficha "${f.nome}"? O produto "${f.nome}" também será removido do estoque.`
+      : 'Excluir esta ficha?'
+    if (!confirm(msg)) return
+    await supabase.from('ficha_ingredientes').delete().eq('ficha_id', f.id)
+    await supabase.from('fichas_tecnicas').delete().eq('id', f.id)
+    // Ficha de produção: o produto gerado some do estoque junto.
+    if (ehProd && f.produto_saida_id) {
+      await supabase.from('produtos').delete().eq('id', f.produto_saida_id)
+    }
     toast.success('Ficha excluída')
     fechar()
-    if (detalhe?.id === id) setDetalhe(null)
+    if (detalhe?.id === f.id) setDetalhe(null)
   }
 
   return (
@@ -256,7 +264,7 @@ export function FichasTecnicas() {
               </div>
               <div className="flex gap-2 mt-3">
                 <button onClick={e => { e.stopPropagation(); abrirEditar(f) }} className="text-xs text-blue-500 hover:text-blue-700">Editar</button>
-                <button onClick={e => { e.stopPropagation(); excluir(f.id) }} className="text-xs text-red-500 hover:text-red-700">Excluir</button>
+                <button onClick={e => { e.stopPropagation(); excluir(f) }} className="text-xs text-red-500 hover:text-red-700">Excluir</button>
               </div>
             </div>
           )
