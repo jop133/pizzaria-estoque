@@ -67,8 +67,8 @@ export function ImportarFoto() {
       const t = toast.loading('Lendo arquivo(s)...')
       try {
         files = await expandirArquivosParaImagens(selecionados)
-      } catch {
-        toast.error('Não foi possível ler o PDF. Tente uma foto.')
+      } catch (err) {
+        toast.error('Não foi possível ler o PDF: ' + (err?.message || 'erro'), { duration: 6000 })
         files = selecionados.filter(f => f.type.startsWith('image/'))
       } finally {
         toast.dismiss(t)

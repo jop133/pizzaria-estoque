@@ -8,8 +8,10 @@ function ehPdf(file) {
 
 async function pdfParaImagens(file) {
   const pdfjs = await import('pdfjs-dist')
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default
-  pdfjs.GlobalWorkerOptions.workerSrc = workerUrl
+  // Worker empacotado pelo Vite (clássico) — compatível com navegadores de
+  // celular que não suportam "module workers".
+  const PdfWorker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?worker')).default
+  pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker()
 
   const buffer = await file.arrayBuffer()
   const pdf = await pdfjs.getDocument({ data: buffer }).promise
