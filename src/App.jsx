@@ -35,8 +35,8 @@ const ABAS = {
 
 // Grupos exibidos no menu lateral
 const GRUPOS = [
-  { titulo: 'Principal', itens: ['dashboard', 'estoque', 'compras', 'lancamentos', 'foto', 'historico'] },
-  { titulo: 'Gestão', itens: ['fichas', 'contagem', 'relatorios'] },
+  { titulo: 'Principal', itens: ['dashboard', 'estoque', 'compras', 'lancamentos', 'foto', 'fichas'] },
+  { titulo: 'Gestão', itens: ['contagem', 'historico', 'relatorios'] },
   { titulo: 'Conta', itens: ['config'] },
 ]
 

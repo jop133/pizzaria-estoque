@@ -2,8 +2,43 @@ const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct'
 const MODEL_TEXTO = 'llama-3.3-70b-versatile'
 
-export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey) {
-  const prompt = `Voce transcreve documentos de estoque. Sua UNICA tarefa e ler a imagem e copiar fielmente cada linha. Nao interprete, nao compare com nada, nao some. Apenas transcreva o que esta escrito.
+// Prompt de leitura específico para a finalidade escolhida pelo usuário.
+// 'entrada' mantém EXATAMENTE o prompt afinado original.
+function montarPromptLeitura(tipo) {
+  if (tipo === 'saida_ficha') {
+    return `Voce le uma COMANDA ou PEDIDO DE VENDA de uma pizzaria/restaurante (itens vendidos ao cliente). Liste cada prato/item vendido e quantos foram vendidos. Nao invente itens.
+
+Para CADA linha/pedido:
+- nome: o nome do prato/item exatamente como escrito (ex: "Pizza Calabresa G", "Refrigerante Lata").
+- quantidade: quantos foram vendidos (numero). Sem numero visivel = 1.
+- unidade: "un".
+- pesoEmbalagem, unidadeEmbalagem e marca: sempre null.
+
+Regras: leia TODAS as linhas, sem pular nem inventar. Cada linha e um item.
+
+Retorne SOMENTE este JSON:
+{"tipo":"saida_ficha","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
+  }
+
+  if (tipo === 'saida_manual') {
+    return `Voce le uma LISTA DE DESCARTE ou USO INTERNO de produtos do estoque (itens retirados, perdidos ou consumidos). Liste cada produto e a quantidade retirada. Nao invente itens.
+
+Para CADA linha:
+- nome: o nome do produto como escrito (mantenha o peso se estiver no nome, ex: "MEL 780G").
+- quantidade: o numero retirado/descartado. Celula vazia ou "O" = 0. Sem numero visivel = 1. Se for peso direto (ex: 1,5 KG), a quantidade e o proprio peso.
+- unidade: a medida (un, pct, cx, dz, kg, g, l, ml). Para peso direto use a unidade de peso. Se nao houver, "un".
+- pesoEmbalagem: SOMENTE se o NOME tiver o peso/volume da embalagem (ex: "MEL 780G"), o NUMERO. Senao null.
+- unidadeEmbalagem: a unidade do peso da embalagem ("g","kg","ml","l") ou null.
+- marca: null.
+
+Regras: leia TODAS as linhas, sem pular nem inventar. Nao multiplique pesos.
+
+Retorne SOMENTE este JSON:
+{"tipo":"saida_manual","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
+  }
+
+  // entrada (padrão) — IDÊNTICO ao prompt original afinado
+  return `Voce transcreve documentos de estoque. Sua UNICA tarefa e ler a imagem e copiar fielmente cada linha. Nao interprete, nao compare com nada, nao some. Apenas transcreva o que esta escrito.
 
 Tipo do documento: "entrada" = nota fiscal ou lista de compras | "saida_ficha" = comanda/pedido | "saida_manual" = descarte | "desconhecido" = outro.
 
@@ -19,6 +54,10 @@ Regras: leia TODAS as linhas, sem pular nenhuma e sem inventar itens que nao exi
 
 Retorne SOMENTE este JSON:
 {"tipo":"entrada","descricao":"descricao curta","itens":[{"nome":"texto da linha","quantidade":1,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null,"marca":null}],"confianca":"alta","observacao":""}`
+}
+
+export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fichas, apiKey, tipo = 'entrada') {
+  const prompt = montarPromptLeitura(tipo)
 
   const body = {
     model: MODEL,
