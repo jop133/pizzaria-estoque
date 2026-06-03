@@ -6,6 +6,7 @@ import { reverterLancamento } from '../services/estoque'
 import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO, TIPOS_CADASTRO, ehCadastro } from '../lib/lancamentos'
 import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
+import { Modal } from '../components/Modal'
 import toast from 'react-hot-toast'
 
 export function Historico() {
@@ -16,6 +17,7 @@ export function Historico() {
   const [periodo, setPeriodo] = useState('todos')
   const [selecionados, setSelecionados] = useState(new Set())
   const [membrosMap, setMembrosMap] = useState({})
+  const [confirmacao, setConfirmacao] = useState(null) // { modo: 'um'|'massa', lancamento? }
 
   // Mapa user_id -> nome (para mostrar quem fez cada ação)
   useEffect(() => {
@@ -65,36 +67,32 @@ export function Historico() {
     }
   }
 
-  async function excluirUm(l) {
-    const aviso = ehCadastro(l.tipo)
-      ? 'Este é um registro de cadastro — excluí-lo NÃO desfaz a ação (o produto/ficha não muda), apenas remove a linha do histórico. Continuar?'
-      : 'Excluir este lançamento? A ação será revertida no estoque.'
-    if (!confirm(aviso)) return
-    try {
-      await reverterLancamento(l)
-      const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
-      if (error) throw new Error(error.message)
-      toast.success(ehCadastro(l.tipo) ? 'Registro removido do histórico' : 'Lançamento excluído e revertido')
-    } catch (e) {
-      toast.error(e.message || 'Erro ao excluir')
-    }
+  // Abrem a caixa de confirmação (a exclusão de fato roda no "Prosseguir")
+  function excluirUm(l) { setConfirmacao({ modo: 'um', lancamento: l }) }
+  function excluirSelecionados() {
+    if (selecionados.size === 0) return
+    setConfirmacao({ modo: 'massa' })
   }
 
-  async function excluirSelecionados() {
-    if (selecionados.size === 0) return
-    const alvos = lancamentos.filter(l => selecionados.has(l.id))
-    const temMov = alvos.some(l => !ehCadastro(l.tipo))
-    const temCad = alvos.some(l => ehCadastro(l.tipo))
-    let aviso = `Excluir ${selecionados.size} lançamento(s)?`
-    if (temMov) aviso += ' As movimentações serão revertidas no estoque.'
-    if (temCad) aviso += ' Os registros de cadastro NÃO serão desfeitos (apenas saem do histórico).'
-    if (!confirm(aviso)) return
+  async function confirmarExclusao() {
+    const c = confirmacao
+    setConfirmacao(null)
+    if (!c) return
     try {
-      for (const l of alvos) await reverterLancamento(l)
-      const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
-      if (error) throw new Error(error.message)
-      setSelecionados(new Set())
-      toast.success(`${selecionados.size} lançamento(s) excluído(s)!`)
+      if (c.modo === 'um') {
+        const l = c.lancamento
+        await reverterLancamento(l)
+        const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
+        if (error) throw new Error(error.message)
+        toast.success(ehCadastro(l.tipo) ? 'Registro removido do histórico' : 'Lançamento excluído e revertido')
+      } else {
+        const alvos = lancamentos.filter(l => selecionados.has(l.id))
+        for (const l of alvos) await reverterLancamento(l)
+        const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
+        if (error) throw new Error(error.message)
+        setSelecionados(new Set())
+        toast.success(`${alvos.length} lançamento(s) excluído(s)!`)
+      }
     } catch (e) {
       toast.error(e.message || 'Erro ao excluir')
     }
@@ -212,6 +210,55 @@ export function Historico() {
       </div>
 
       <p className="text-xs text-gray-400 text-right">{filtrados.length} registros</p>
+
+      {confirmacao && (() => {
+        const alvos = confirmacao.modo === 'um'
+          ? [confirmacao.lancamento]
+          : lancamentos.filter(l => selecionados.has(l.id))
+        const revertiveis = alvos.filter(l => !ehCadastro(l.tipo)).length
+        const naoRev = alvos.filter(l => ehCadastro(l.tipo)).length
+        const nomeUm = confirmacao.modo === 'um'
+          ? (confirmacao.lancamento.nomeFicha || confirmacao.lancamento.nomeProduto || confirmacao.lancamento.observacao || 'este lançamento')
+          : ''
+        return (
+          <Modal title="Confirmar exclusão" onClose={() => setConfirmacao(null)}>
+            <div className="space-y-4">
+              <p className="text-sm text-gray-700">
+                {confirmacao.modo === 'um'
+                  ? <>Você vai excluir <strong>{nomeUm}</strong>.</>
+                  : <>Você vai excluir <strong>{revertiveis + naoRev} lançamento(s)</strong>.</>}
+              </p>
+
+              {revertiveis > 0 && (
+                <div className="flex gap-2 bg-green-50 border border-green-200 rounded-lg p-3">
+                  <span className="text-green-600">✅</span>
+                  <p className="text-sm text-green-800">
+                    {confirmacao.modo === 'um'
+                      ? 'Esta ação será REVERTIDA no estoque (o efeito será desfeito).'
+                      : `${revertiveis} movimentação(ões) será(ão) REVERTIDA(S) no estoque.`}
+                  </p>
+                </div>
+              )}
+
+              {naoRev > 0 && (
+                <div className="flex gap-2 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <span className="text-yellow-600">⚠️</span>
+                  <p className="text-sm text-yellow-800">
+                    {confirmacao.modo === 'um'
+                      ? 'Este é um registro de cadastro: NÃO será desfeito — apenas sai do histórico (o produto/ficha não muda).'
+                      : `${naoRev} registro(s) de cadastro NÃO será(ão) desfeito(s) — apenas saem do histórico.`}
+                  </p>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => setConfirmacao(null)} className="btn-secondary flex-1">Voltar</button>
+                <button onClick={confirmarExclusao} className="btn-danger flex-1">Prosseguir</button>
+              </div>
+            </div>
+          </Modal>
+        )
+      })()}
     </div>
   )
 }
