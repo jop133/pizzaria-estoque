@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
+import { registrarEvento } from '../services/estoque'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -48,8 +49,10 @@ export function Estoque() {
   async function excluirSelecionados() {
     if (selecionados.size === 0) return
     if (!confirm(`Excluir ${selecionados.size} produto(s) selecionado(s)?`)) return
+    const alvos = produtos.filter(p => selecionados.has(p.id))
     const { error } = await supabase.from('produtos').delete().in('id', [...selecionados])
     if (error) return toast.error('Erro ao excluir')
+    for (const p of alvos) await registrarEvento('produto_excluido', { nome: p.nome })
     setSelecionados(new Set())
     toast.success(`${selecionados.size} produto(s) excluído(s)!`)
   }
@@ -68,12 +71,14 @@ export function Estoque() {
       estoque_minimo: parseFloat(form.estoque_minimo) || 0,
     }
     if (modal === 'novo') {
-      const { error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId })
+      const { data: novo, error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId }).select().single()
       if (error) return toast.error(error.message)
+      await registrarEvento('produto_novo', { produtoId: novo?.id, nome: data.nome })
       toast.success('Produto adicionado!')
     } else {
       const { error } = await supabase.from('produtos').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
+      await registrarEvento('produto_editado', { produtoId: modal.id, nome: data.nome })
 
       // Se a unidade mudou (entre compatíveis), converte as quantidades usadas
       // deste produto nas fichas técnicas, para manterem o valor real.
@@ -95,9 +100,10 @@ export function Estoque() {
     fechar()
   }
 
-  async function excluir(id) {
+  async function excluir(p) {
     if (!confirm('Excluir este produto?')) return
-    await supabase.from('produtos').delete().eq('id', id)
+    await supabase.from('produtos').delete().eq('id', p.id)
+    await registrarEvento('produto_excluido', { nome: p.nome })
     toast.success('Produto excluído')
     fechar()
   }
@@ -246,7 +252,7 @@ export function Estoque() {
             <div className="flex gap-2 pt-2">
               <button onClick={salvar} className="btn-primary flex-1">Salvar</button>
               {modal !== 'novo' && (
-                <button onClick={() => excluir(modal.id)} className="btn-danger">Excluir</button>
+                <button onClick={() => excluir(modal)} className="btn-danger">Excluir</button>
               )}
             </div>
           </div>

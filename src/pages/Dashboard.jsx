@@ -1,6 +1,7 @@
 import { useProdutos, useLancamentos, useProdutosAbaixoMinimo } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
+import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO } from '../lib/lancamentos'
 import toast from 'react-hot-toast'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
@@ -22,7 +23,7 @@ export function Dashboard() {
 
   const consumoPorProduto = {}
   ultimos7dias
-    .filter(l => l.tipo !== 'entrada')
+    .filter(l => TIPOS_MOVIMENTACAO.includes(l.tipo) && l.tipo !== 'entrada')
     .forEach(l => {
       const key = l.nomeProduto || l.nomeFicha || 'Sem nome'
       consumoPorProduto[key] = (consumoPorProduto[key] || 0) + l.quantidade
@@ -88,10 +89,8 @@ export function Dashboard() {
             {lancamentos.slice(0, 10).map(l => (
               <div key={l.id} className="flex items-center justify-between text-sm py-1 border-b border-gray-100 last:border-0">
                 <div className="flex items-center gap-2 min-w-0">
-                  <Badge color={l.tipo === 'entrada' ? 'green' : l.tipo === 'ajuste' ? 'blue' : l.tipo === 'producao' ? 'yellow' : 'red'}>
-                    {l.tipo === 'entrada' ? '+ Entrada' : l.tipo === 'ajuste' ? '± Ajuste' : l.tipo === 'producao' ? '⚙ Produção' : l.tipo === 'saida_ficha' ? '- Ficha' : '- Manual'}
-                  </Badge>
-                  <span className="text-gray-700 truncate">{l.nomeFicha || l.nomeProduto}</span>
+                  <Badge color={TIPO_COR[l.tipo] || 'gray'}>{TIPO_LABEL[l.tipo] || l.tipo}</Badge>
+                  <span className="text-gray-700 truncate">{l.nomeFicha || l.nomeProduto || l.observacao || '—'}</span>
                 </div>
                 <div className="flex items-center gap-2 text-gray-500 shrink-0">
                   <span>{l.quantidade}</span>

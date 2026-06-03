@@ -60,6 +60,22 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
   })
 }
 
+// Registra um evento de cadastro/auditoria no histórico (não mexe no estoque).
+// O nome do item vai na observação para sobreviver mesmo se o item for excluído.
+export async function registrarEvento(tipo, { produtoId = null, fichaId = null, nome = '' } = {}) {
+  const orgId = session.organizacaoId
+  if (!orgId) return
+  await supabase.from('lancamentos').insert({
+    organizacao_id: orgId,
+    tipo,
+    produto_id: produtoId,
+    ficha_id: fichaId,
+    quantidade: 0,
+    observacao: nome,
+    user_id: session.userId,
+  })
+}
+
 // Ajusta o estoque de um produto por um delta (+ entra, − sai), nunca negativo.
 async function ajustarEstoque(produtoId, delta) {
   if (!produtoId) return

@@ -3,7 +3,7 @@ import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoqu
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
-import { registrarProducao } from '../services/estoque'
+import { registrarProducao, registrarEvento } from '../services/estoque'
 import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
@@ -93,6 +93,7 @@ export function FichasTecnicas() {
         await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: qtd })
       }
     }
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: resultadoFoto.nome })
     toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
     setModalFoto(false)
     setFotoAnalise(null)
@@ -152,6 +153,7 @@ export function FichasTecnicas() {
       }
     }
 
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome })
     toast.success(`Ficha de produção "${nome}" criada com ${(resultadoFoto.ingredientes || []).length} insumo(s)!`)
     setModalFoto(false)
     setFotoAnalise(null)
@@ -235,11 +237,13 @@ export function FichasTecnicas() {
         .select()
         .single()
       if (error) return toast.error(error.message)
+      await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: data.nome })
       toast.success('Ficha criada!')
       setDetalhe({ ...data, id: ficha.id })
     } else {
       const { error } = await supabase.from('fichas_tecnicas').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
+      await registrarEvento('ficha_editada', { fichaId: modal.id, nome: data.nome })
       toast.success('Ficha atualizada!')
       setDetalhe(d => (d?.id === modal.id ? { ...d, ...data } : d))
     }
@@ -258,6 +262,7 @@ export function FichasTecnicas() {
     if (ehProd && f.produto_saida_id) {
       await supabase.from('produtos').delete().eq('id', f.produto_saida_id)
     }
+    await registrarEvento('ficha_excluida', { nome: f.nome })
     toast.success('Ficha excluída')
     fechar()
     if (detalhe?.id === f.id) setDetalhe(null)

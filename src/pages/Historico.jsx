@@ -3,6 +3,7 @@ import { useLancamentos } from '../hooks/useEstoque'
 import { useAuth } from '../contexts/AuthContext'
 import { exportarHistoricoCSV } from '../services/importExport'
 import { reverterLancamento } from '../services/estoque'
+import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO, TIPOS_CADASTRO, ehCadastro } from '../lib/lancamentos'
 import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -31,7 +32,10 @@ export function Historico() {
   }, [organizacaoId])
 
   const filtrados = lancamentos.filter(l => {
-    const okTipo = !filtroTipo || l.tipo === filtroTipo
+    const okTipo = !filtroTipo
+      || (filtroTipo === 'g_mov' ? TIPOS_MOVIMENTACAO.includes(l.tipo)
+        : filtroTipo === 'g_cad' ? TIPOS_CADASTRO.includes(l.tipo)
+          : l.tipo === filtroTipo)
     const nome = (l.nomeFicha || l.nomeProduto || '').toLowerCase()
     const okBusca = !busca || nome.includes(busca.toLowerCase())
     let okPeriodo = true
@@ -87,9 +91,6 @@ export function Historico() {
     }
   }
 
-  const tipoBadge = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', ajuste: 'blue', producao: 'yellow' }
-  const tipoLabel = { entrada: '+ Entrada', saida_ficha: '- Ficha', saida_manual: '- Manual', ajuste: '± Ajuste', producao: '⚙ Produção' }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -106,11 +107,25 @@ export function Historico() {
         />
         <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} className="input w-auto">
           <option value="">Todos os tipos</option>
-          <option value="entrada">Entradas</option>
-          <option value="saida_ficha">Saída por Ficha</option>
-          <option value="saida_manual">Saída Manual</option>
-          <option value="ajuste">Ajustes</option>
-          <option value="producao">Produção</option>
+          <optgroup label="Grupos">
+            <option value="g_mov">Só movimentações</option>
+            <option value="g_cad">Só cadastros/edições</option>
+          </optgroup>
+          <optgroup label="Movimentações">
+            <option value="entrada">Entradas</option>
+            <option value="saida_ficha">Saída por Ficha</option>
+            <option value="saida_manual">Saída Manual</option>
+            <option value="ajuste">Ajustes</option>
+            <option value="producao">Produção</option>
+          </optgroup>
+          <optgroup label="Cadastros e edições">
+            <option value="produto_novo">Produto criado</option>
+            <option value="produto_editado">Produto editado</option>
+            <option value="produto_excluido">Produto excluído</option>
+            <option value="ficha_nova">Ficha criada</option>
+            <option value="ficha_editada">Ficha editada</option>
+            <option value="ficha_excluida">Ficha excluída</option>
+          </optgroup>
         </select>
         <select value={periodo} onChange={e => setPeriodo(e.target.value)} className="input w-auto">
           <option value="todos">Todo período</option>
@@ -162,15 +177,17 @@ export function Historico() {
                     })}
                   </td>
                   <td className="px-4 py-3">
-                    <Badge color={tipoBadge[l.tipo]}>{tipoLabel[l.tipo]}</Badge>
+                    <Badge color={TIPO_COR[l.tipo] || 'gray'}>{TIPO_LABEL[l.tipo] || l.tipo}</Badge>
                   </td>
                   <td className="px-4 py-3 font-medium text-gray-800">
-                    {l.nomeFicha || l.nomeProduto || '—'}
+                    {ehCadastro(l.tipo)
+                      ? (l.nomeProduto || l.nomeFicha || l.observacao || '—')
+                      : (l.nomeFicha || l.nomeProduto || '—')}
                     {l.marca && <span className="ml-1 text-xs text-gray-400 font-normal">· {l.marca}</span>}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono">{l.quantidade}</td>
+                  <td className="px-4 py-3 text-right font-mono">{ehCadastro(l.tipo) ? '—' : l.quantidade}</td>
                   <td className="px-4 py-3 text-gray-500 text-xs hidden sm:table-cell">{membrosMap[l.user_id] || '—'}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{l.observacao || '—'}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{ehCadastro(l.tipo) ? '—' : (l.observacao || '—')}</td>
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => excluirUm(l)}
