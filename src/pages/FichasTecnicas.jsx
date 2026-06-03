@@ -9,8 +9,9 @@ import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
+const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml']
 const VAZIO_PRATO = { nome: '', categoria: 'Pizza', descricao: '', tipo_ficha: 'prato' }
-const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', rendimento: '' }
+const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', unidade: 'kg', rendimento: '' }
 
 export function FichasTecnicas() {
   const fichas = useFichas()
@@ -109,7 +110,8 @@ export function FichasTecnicas() {
     setModal('novo')
   }
   function abrirEditar(f) {
-    setForm({ ...f, produto_saida_id: f.produto_saida_id ?? '', rendimento: f.rendimento ?? '' })
+    const unidade = produtos.find(p => p.id === f.produto_saida_id)?.unidade || 'kg'
+    setForm({ ...f, produto_saida_id: f.produto_saida_id ?? '', rendimento: f.rendimento ?? '', unidade })
     setModal(f)
   }
   function fechar() { setModal(null) }
@@ -119,14 +121,39 @@ export function FichasTecnicas() {
     const tipo = form.tipo_ficha || 'prato'
     let data
     if (tipo === 'producao') {
-      if (!form.produto_saida_id) return toast.error('Selecione o produto gerado')
       if (!form.rendimento || parseFloat(form.rendimento) <= 0) return toast.error('Informe o rendimento (maior que zero)')
+      const nome = form.nome.trim()
+      const unidade = form.unidade || 'kg'
+      const orgId = session.organizacaoId
+
+      // O produto gerado é o próprio nome da ficha — cria no estoque (ou
+      // reaproveita se já existir um produto com o mesmo nome). Na edição,
+      // sincroniza nome/unidade do produto vinculado.
+      let produtoSaidaId = form.produto_saida_id ? parseInt(form.produto_saida_id) : null
+      if (produtoSaidaId) {
+        await supabase.from('produtos').update({ nome, unidade }).eq('id', produtoSaidaId)
+      } else {
+        const existente = produtos.find(p => p.nome.trim().toLowerCase() === nome.toLowerCase())
+        if (existente) {
+          produtoSaidaId = existente.id
+          await supabase.from('produtos').update({ unidade }).eq('id', produtoSaidaId)
+        } else {
+          const { data: novoProd, error: errProd } = await supabase
+            .from('produtos')
+            .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+            .select()
+            .single()
+          if (errProd) return toast.error(errProd.message)
+          produtoSaidaId = novoProd.id
+        }
+      }
+
       data = {
-        nome: form.nome.trim(),
+        nome,
         categoria: 'Produção',
         descricao: form.descricao || '',
         tipo_ficha: 'producao',
-        produto_saida_id: parseInt(form.produto_saida_id),
+        produto_saida_id: produtoSaidaId,
         rendimento: parseFloat(form.rendimento),
       }
     } else {
@@ -219,7 +246,7 @@ export function FichasTecnicas() {
                 <div className="min-w-0">
                   <p className="font-semibold text-gray-800">{f.nome}</p>
                   {f.tipo_ficha === 'producao'
-                    ? <p className="text-xs text-gray-500 mt-1">Gera: {prodGerado?.nome || '—'}{f.rendimento ? ` (${f.rendimento} ${prodGerado?.unidade || ''}/lote)` : ''}</p>
+                    ? <p className="text-xs text-gray-500 mt-1">Rende {f.rendimento || '—'} {prodGerado?.unidade || ''}/lote</p>
                     : (f.descricao && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{f.descricao}</p>)
                   }
                 </div>
@@ -245,23 +272,24 @@ export function FichasTecnicas() {
         <Modal title={modal === 'novo' ? (form.tipo_ficha === 'producao' ? 'Nova Ficha de Produção' : 'Nova Ficha de Prato') : 'Editar Ficha'} onClose={fechar}>
           <div className="space-y-3">
             <div>
-              <label className="label">Nome *</label>
+              <label className="label">{form.tipo_ficha === 'producao' ? 'Nome do produto gerado *' : 'Nome *'}</label>
               <input className="input" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder={form.tipo_ficha === 'producao' ? 'Ex: Massa de Pizza' : 'Ex: Pizza Margherita'} />
+              {form.tipo_ficha === 'producao' && (
+                <p className="text-xs text-gray-400 mt-1">Este produto será criado no estoque automaticamente.</p>
+              )}
             </div>
 
             {form.tipo_ficha === 'producao' ? (
               <>
                 <div>
-                  <label className="label">Produto gerado *</label>
-                  <select className="input" value={form.produto_saida_id} onChange={e => setForm(f => ({ ...f, produto_saida_id: e.target.value }))}>
-                    <option value="">Selecionar produto...</option>
-                    {produtos.map(p => <option key={p.id} value={p.id}>{p.nome} ({p.unidade})</option>)}
+                  <label className="label">Unidade do produto gerado *</label>
+                  <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                    {UNIDADES_PRODUCAO.map(u => <option key={u} value={u}>{u}</option>)}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">O produto que será adicionado ao estoque ao produzir.</p>
                 </div>
                 <div>
                   <label className="label">Rendimento por lote *</label>
-                  <input type="number" min="0.001" step="0.001" className="input" value={form.rendimento} onChange={e => setForm(f => ({ ...f, rendimento: e.target.value }))} placeholder="Ex: 10 (unidades por produção)" />
+                  <input type="number" min="0.001" step="0.001" className="input" value={form.rendimento} onChange={e => setForm(f => ({ ...f, rendimento: e.target.value }))} placeholder={`Ex: 5 (${form.unidade || 'kg'} por produção)`} />
                 </div>
               </>
             ) : (
