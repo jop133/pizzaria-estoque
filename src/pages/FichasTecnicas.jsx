@@ -1,10 +1,11 @@
 import { useState, useRef } from 'react'
-import { useFichas, useProdutos, useFichaIngredientes } from '../hooks/useEstoque'
+import { useFichas, useProdutos, useFichaIngredientes, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
 import { registrarProducao, registrarEvento } from '../services/estoque'
 import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
+import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -17,6 +18,8 @@ const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produt
 export function FichasTecnicas() {
   const fichas = useFichas()
   const produtos = useProdutos()
+  const ingredientes = useTodosIngredientes()
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
   const [aba, setAba] = useState('prato') // 'prato' | 'producao'
   const [modal, setModal] = useState(null)
   const [detalhe, setDetalhe] = useState(null)
@@ -348,7 +351,7 @@ export function FichasTecnicas() {
         )}
       </div>
 
-      {detalhe && <DetalheIngredientes ficha={detalhe} />}
+      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} />}
 
       {modal && (
         <Modal title={modal === 'novo' ? (form.tipo_ficha === 'producao' ? 'Nova Ficha de Produção' : 'Nova Ficha de Prato') : 'Editar Ficha'} onClose={fechar}>
@@ -455,7 +458,7 @@ export function FichasTecnicas() {
   )
 }
 
-function DetalheIngredientes({ ficha }) {
+function DetalheIngredientes({ ficha, custoUnit }) {
   const produtos = useProdutos()
   const ingredientes = useFichaIngredientes(ficha.id)
   const [form, setForm] = useState({ produtoId: '', quantidade: '' })
@@ -464,6 +467,10 @@ function DetalheIngredientes({ ficha }) {
 
   const ehProducao = ficha.tipo_ficha === 'producao'
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
+
+  // Custo total dos insumos desta ficha (resolve produtos de produção também)
+  const custoTotal = ingredientes.reduce((s, ing) => s + (ing.quantidade || 0) * (custoUnit ? custoUnit(ing.produto_id) : 0), 0)
+  const custoPorUnidade = ehProducao && ficha.rendimento > 0 ? custoTotal / ficha.rendimento : 0
 
   async function adicionar() {
     if (!form.produtoId || !form.quantidade) return toast.error('Preencha produto e quantidade')
@@ -499,15 +506,23 @@ function DetalheIngredientes({ ficha }) {
 
   return (
     <div className="bg-white border border-gray-200 rounded-xl p-4">
-      <h2 className="font-semibold text-gray-800 mb-4">
+      <h2 className="font-semibold text-gray-800 mb-1">
         {ehProducao ? 'Insumos' : 'Ingredientes'} — <span className="text-red-600">{ficha.nome}</span>
       </h2>
+      {!ehProducao && (
+        <p className="text-sm text-gray-600 mb-4">Custo da ficha: <strong className="text-gray-800">{formatBRL(custoTotal)}</strong></p>
+      )}
+      {ehProducao && <div className="mb-4" />}
 
       {ehProducao && (
         <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
           <p className="text-sm text-gray-700">
             Gera <strong>{prodGerado?.nome || '—'}</strong>
             {ficha.rendimento ? <> — rende <strong>{ficha.rendimento} {prodGerado?.unidade || ''}</strong> por lote</> : ' — defina o rendimento'}
+          </p>
+          <p className="text-sm text-gray-700">
+            Custo por lote: <strong className="text-gray-800">{formatBRL(custoTotal)}</strong>
+            {ficha.rendimento > 0 && <> · por {prodGerado?.unidade || 'un'}: <strong className="text-gray-800">{formatBRL(custoPorUnidade)}</strong></>}
           </p>
           <div className="flex gap-2 items-end">
             <div>

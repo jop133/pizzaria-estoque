@@ -1,8 +1,6 @@
-import { useProdutos, useLancamentos, useProdutosAbaixoMinimo } from '../hooks/useEstoque'
-import { supabase } from '../lib/supabase'
-import { Badge } from '../components/Badge'
-import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO } from '../lib/lancamentos'
-import toast from 'react-hot-toast'
+import { useProdutos, useLancamentos, useProdutosAbaixoMinimo, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
+import { TIPOS_MOVIMENTACAO } from '../lib/lancamentos'
+import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
@@ -11,9 +9,25 @@ export function Dashboard() {
   const produtos = useProdutos()
   const lancamentos = useLancamentos()
   const abaixoMinimo = useProdutosAbaixoMinimo()
+  const fichas = useFichas()
+  const ingredientes = useTodosIngredientes()
 
   const totalProdutos = produtos.length
   const totalItens = produtos.reduce((s, p) => s + (p.quantidade || 0), 0)
+
+  // Valor parado no estoque: soma de (quantidade × custo) por produto.
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
+  const valorPorCategoria = {}
+  let valorTotal = 0
+  for (const p of produtos) {
+    const v = (p.quantidade || 0) * custoUnit(p.id)
+    if (v > 0) {
+      valorTotal += v
+      const cat = p.categoria || 'Outros'
+      valorPorCategoria[cat] = (valorPorCategoria[cat] || 0) + v
+    }
+  }
+  const valorCategorias = Object.entries(valorPorCategoria).sort((a, b) => b[1] - a[1])
 
   const ultimos7dias = lancamentos.filter(l => {
     const d = new Date(l.data)
@@ -81,26 +95,17 @@ export function Dashboard() {
       )}
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h2 className="font-semibold text-gray-700 mb-3">Últimos Lançamentos</h2>
-        {lancamentos.length === 0 ? (
-          <p className="text-gray-400 text-sm">Nenhum lançamento ainda.</p>
+        <h2 className="font-semibold text-gray-700 mb-1">💰 Valor em estoque</h2>
+        <p className="text-3xl font-bold text-green-700">{formatBRL(valorTotal)}</p>
+        <p className="text-xs text-gray-400 mb-3">Dinheiro parado: soma de (quantidade × custo) de cada produto.</p>
+        {valorCategorias.length === 0 ? (
+          <p className="text-gray-400 text-sm">Cadastre o preço de custo dos produtos para ver o valor.</p>
         ) : (
-          <div className="space-y-2">
-            {lancamentos.slice(0, 10).map(l => (
-              <div key={l.id} className="flex items-center justify-between text-sm py-1 border-b border-gray-100 last:border-0">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Badge color={TIPO_COR[l.tipo] || 'gray'}>{TIPO_LABEL[l.tipo] || l.tipo}</Badge>
-                  <span className="text-gray-700 truncate">{l.nomeFicha || l.nomeProduto || l.observacao || '—'}</span>
-                </div>
-                <div className="flex items-center gap-2 text-gray-500 shrink-0">
-                  <span>{l.quantidade}</span>
-                  <span className="text-xs">{new Date(l.data).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
-                  <button
-                    onClick={async () => { await supabase.from('lancamentos').delete().eq('id', l.id); toast.success('Lançamento removido') }}
-                    className="text-gray-300 hover:text-red-500 transition-colors ml-1"
-                    title="Excluir lançamento"
-                  >✕</button>
-                </div>
+          <div className="space-y-1">
+            {valorCategorias.map(([cat, v]) => (
+              <div key={cat} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
+                <span className="text-gray-600">{cat}</span>
+                <span className="font-mono text-gray-800">{formatBRL(v)}</span>
               </div>
             ))}
           </div>

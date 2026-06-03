@@ -1,9 +1,10 @@
 import { useState, useRef } from 'react'
-import { useProdutos } from '../hooks/useEstoque'
+import { useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
+import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
@@ -11,10 +12,13 @@ import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
-const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0 }
+const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0, preco: 0 }
 
 export function Estoque() {
   const produtos = useProdutos()
+  const fichas = useFichas()
+  const ingredientes = useTodosIngredientes()
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
   const [modal, setModal] = useState(null)
   const [form, setForm] = useState(VAZIO)
   const [busca, setBusca] = useState('')
@@ -69,6 +73,7 @@ export function Estoque() {
       unidade: form.unidade,
       quantidade: parseFloat(form.quantidade) || 0,
       estoque_minimo: parseFloat(form.estoque_minimo) || 0,
+      preco: parseFloat(form.preco) || 0,
     }
     if (modal === 'novo') {
       const { data: novo, error } = await supabase.from('produtos').insert({ ...data, organizacao_id: session.organizacaoId }).select().single()
@@ -249,6 +254,20 @@ export function Estoque() {
                 <input type="number" min="0" step="0.01" className="input" value={form.estoque_minimo} onChange={e => setForm(f => ({ ...f, estoque_minimo: e.target.value }))} />
               </div>
             </div>
+            {modal !== 'novo' && ehProdutoDeProducao(modal.id, fichas) ? (
+              <div>
+                <label className="label">Custo (calculado pela ficha de produção)</label>
+                <div className="input bg-gray-50 text-gray-600">
+                  {formatBRL(custoUnit(modal.id))} <span className="text-xs text-gray-400">/ {form.unidade}</span>
+                </div>
+                <p className="text-xs text-gray-400 mt-1">Soma dos insumos ÷ rendimento. Ajuste os preços dos insumos para alterar.</p>
+              </div>
+            ) : (
+              <div>
+                <label className="label">Preço de custo (R$ por {form.unidade})</label>
+                <input type="number" min="0" step="0.01" className="input" placeholder="Ex: 4.50" value={form.preco} onChange={e => setForm(f => ({ ...f, preco: e.target.value }))} />
+              </div>
+            )}
             <div className="flex gap-2 pt-2">
               <button onClick={salvar} className="btn-primary flex-1">Salvar</button>
               {modal !== 'novo' && (

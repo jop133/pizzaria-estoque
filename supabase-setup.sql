@@ -42,7 +42,8 @@ create table if not exists produtos (
   categoria text default 'Outros',
   unidade text default 'un',
   quantidade numeric default 0,
-  estoque_minimo numeric default 0
+  estoque_minimo numeric default 0,
+  preco numeric default 0  -- preço de custo (R$); migração: alter table produtos add column if not exists preco numeric default 0;
 );
 
 -- Fichas Técnicas
