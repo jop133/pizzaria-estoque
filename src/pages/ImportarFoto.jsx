@@ -285,6 +285,16 @@ export function ImportarFoto() {
     }))
   }
 
+  // Item "em branco"/incompleto: sem quantidade, ou produto por peso sem o peso.
+  function itemIncompleto(item) {
+    if (itemEmBranco(item)) return true
+    if (item.fichaId) return false
+    const prod = produtos.find(p => p.id === item.produtoId)
+    const unidadeAlvo = unidadeAlvoDoItem(item, prod)
+    const r = calcular(item, unidadeAlvo)
+    return r.converter && (r.precisaPeso || !r.total)
+  }
+
   async function confirmarTodos(incluirEmBranco = false) {
     const prontas = fila.filter(f => f.status === 'pronto')
     if (!prontas.length) return toast.error('Nenhuma foto analisada para confirmar')
@@ -294,20 +304,23 @@ export function ImportarFoto() {
     let ok = 0
     let criados = 0
     let erros = 0
-    let semPeso = 0
-    // Índices lançados com sucesso por foto, para não relançar em nova confirmação.
-    const lancadosPorFoto = {}
+    // Índices já resolvidos por foto (lançados OU pulados), para sair da fila.
+    const processadosPorFoto = {}
     // Produtos novos criados nesta confirmação, por nomeBase, para unir itens
     // não cadastrados do mesmo tipo num único produto.
     const criadosPorBase = {}
 
     for (const foto of prontas) {
-      lancadosPorFoto[foto.id] = new Set()
+      processadosPorFoto[foto.id] = new Set()
       for (let i = 0; i < foto.itens.length; i++) {
         const item = foto.itens[i]
         if (!item.ativo) continue
-        // Item em branco (sem quantidade): só lança se o usuário pediu.
-        if (!incluirEmBranco && itemEmBranco(item)) { pulados++; continue }
+        // Item em branco/incompleto: sem a opção marcada, pula e sai da fila.
+        if (itemIncompleto(item) && !incluirEmBranco) {
+          pulados++
+          processadosPorFoto[foto.id].add(i)
+          continue
+        }
         try {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
@@ -323,13 +336,16 @@ export function ImportarFoto() {
           }
 
           // Total que vai para o estoque: embalagem×peso (quando aplicável) ou a
-          // própria quantidade. Calculado antes de criar para não gerar produto
-          // quando o peso da embalagem ainda falta.
+          // própria quantidade. Se faltar o peso e o usuário optou por lançar
+          // mesmo assim, usa a quantidade crua (sem conversão).
           let quantidadeFinal = parseFloat(item.quantidade) || 0
           if (!fichaId) {
             const { converter, precisaPeso, total } = calcular(item, unidadeAlvo)
-            if (converter && (precisaPeso || !total)) { semPeso++; continue }
-            quantidadeFinal = total
+            if (converter && (precisaPeso || !total)) {
+              quantidadeFinal = parseFloat(item.quantidade) || 0
+            } else {
+              quantidadeFinal = total
+            }
           }
 
           if (vaiCriar) {
@@ -365,21 +381,20 @@ export function ImportarFoto() {
             await registrarSaidaManual(produtoId, quantidadeFinal, 'Importado por foto')
           }
           ok++
-          lancadosPorFoto[foto.id].add(i)
+          processadosPorFoto[foto.id].add(i)
         } catch { erros++ }
       }
     }
 
     setConfirmando(false)
 
-    // Remove fotos totalmente lançadas; nas que sobraram itens (ex: sem peso),
-    // desativa os já lançados para não duplicar e mantém o resto para revisão.
+    // Remove da fila os itens já resolvidos (lançados ou pulados em branco);
+    // o que sobrou (ex: sem vínculo) continua para revisão.
     setFila(prev => prev.flatMap(f => {
-      const lancados = lancadosPorFoto[f.id]
-      if (!lancados) return [f]
-      const itens = f.itens.map((it, i) => lancados.has(i) ? { ...it, ativo: false } : it)
-      const restantes = itens.filter(it => it.ativo)
-      if (restantes.length === 0) return []
+      const proc = processadosPorFoto[f.id]
+      if (!proc) return [f]
+      const itens = f.itens.filter((it, i) => !proc.has(i))
+      if (itens.length === 0) return []
       return [{ ...f, itens }]
     }))
 
@@ -387,14 +402,13 @@ export function ImportarFoto() {
       const msg = criados > 0 ? `${ok} item(ns) lançado(s)! ${criados} produto(s) criado(s) automaticamente.` : `${ok} item(ns) lançado(s) no estoque!`
       toast.success(msg)
     }
-    if (semPeso > 0) toast.error(`${semPeso} item(ns) sem peso da embalagem — preencha o peso e confirme novamente`, { duration: 5000 })
-    if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados`)
-    if (pulados > 0) toast(`${pulados} item(ns) em branco não foram lançados`, { icon: '⬜' })
+    if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados (sem vínculo)`)
+    if (pulados > 0) toast(`${pulados} item(ns) em branco foram retirados da fila`, { icon: '⬜' })
   }
 
   const totalProntas = fila.filter(f => f.status === 'pronto').length
   const totalItensAtivos = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo).length, 0)
-  const totalEmBranco = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo && itemEmBranco(i)).length, 0)
+  const totalEmBranco = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo && itemIncompleto(i)).length, 0)
 
   return (
     <div className="space-y-4 max-w-lg mx-auto">
@@ -701,10 +715,10 @@ export function ImportarFoto() {
                 <div className="flex gap-2 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                   <span className="text-yellow-600">⬜</span>
                   <p className="text-sm text-yellow-800">
-                    <strong>{totalEmBranco} item(ns) estão em branco</strong> (sem quantidade).
+                    <strong>{totalEmBranco} item(ns) estão em branco</strong> (sem quantidade ou sem peso).
                     {incluirBranco
                       ? ' Eles TAMBÉM serão lançados.'
-                      : ' Ao prosseguir, eles NÃO serão lançados.'}
+                      : ' Ao prosseguir, eles NÃO serão lançados e sairão da fila.'}
                   </p>
                 </div>
                 <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
