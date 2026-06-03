@@ -69,10 +69,11 @@ export function Historico() {
     if (!confirm('Excluir este lançamento? A ação será revertida no estoque.')) return
     try {
       await reverterLancamento(l)
-      await supabase.from('lancamentos').delete().eq('id', l.id)
+      const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
+      if (error) throw new Error(error.message)
       toast.success('Lançamento excluído e revertido')
-    } catch {
-      toast.error('Erro ao excluir')
+    } catch (e) {
+      toast.error(e.message || 'Erro ao excluir')
     }
   }
 
@@ -83,11 +84,11 @@ export function Historico() {
       const alvos = lancamentos.filter(l => selecionados.has(l.id))
       for (const l of alvos) await reverterLancamento(l)
       const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
-      if (error) return toast.error('Erro ao excluir')
+      if (error) throw new Error(error.message)
       setSelecionados(new Set())
       toast.success(`${selecionados.size} lançamento(s) excluído(s) e revertido(s)!`)
-    } catch {
-      toast.error('Erro ao excluir')
+    } catch (e) {
+      toast.error(e.message || 'Erro ao excluir')
     }
   }
 

@@ -87,6 +87,7 @@ export function FichasTecnicas() {
           .single()
         produtoId = novo?.id
         unidadeDestino = ing.unidade || 'un'
+        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
       }
       if (produtoId) {
         const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
@@ -122,6 +123,7 @@ export function FichasTecnicas() {
         .select().single()
       if (e1) return toast.error(e1.message)
       prodGeradoId = novo.id
+      await registrarEvento('produto_novo', { produtoId: prodGeradoId, nome })
     }
 
     const { data: ficha, error } = await supabase
@@ -146,6 +148,7 @@ export function FichasTecnicas() {
           .select().single()
         produtoId = novo?.id
         unidadeDestino = ing.unidade || 'un'
+        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
       }
       if (produtoId) {
         const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
@@ -210,6 +213,7 @@ export function FichasTecnicas() {
             .single()
           if (errProd) return toast.error(errProd.message)
           produtoSaidaId = novoProd.id
+          await registrarEvento('produto_novo', { produtoId: produtoSaidaId, nome })
         }
       }
 
@@ -252,15 +256,19 @@ export function FichasTecnicas() {
 
   async function excluir(f) {
     const ehProd = f.tipo_ficha === 'producao'
-    const msg = ehProd
-      ? `Excluir a ficha "${f.nome}"? O produto "${f.nome}" também será removido do estoque.`
-      : 'Excluir esta ficha?'
-    if (!confirm(msg)) return
+    if (!confirm('Excluir esta ficha?')) return
+    // Remove as linhas da receita desta ficha (não apaga os produtos/insumos).
     await supabase.from('ficha_ingredientes').delete().eq('ficha_id', f.id)
     await supabase.from('fichas_tecnicas').delete().eq('id', f.id)
-    // Ficha de produção: o produto gerado some do estoque junto.
+
+    // Produção: remove o produto gerado SOMENTE se ele não for usado como
+    // insumo em nenhuma outra ficha (assim insumos em uso nunca somem).
     if (ehProd && f.produto_saida_id) {
-      await supabase.from('produtos').delete().eq('id', f.produto_saida_id)
+      const { data: usos } = await supabase
+        .from('ficha_ingredientes').select('id').eq('produto_id', f.produto_saida_id).limit(1)
+      if (!usos || usos.length === 0) {
+        await supabase.from('produtos').delete().eq('id', f.produto_saida_id)
+      }
     }
     await registrarEvento('ficha_excluida', { nome: f.nome })
     toast.success('Ficha excluída')

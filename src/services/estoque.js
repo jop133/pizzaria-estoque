@@ -91,7 +91,7 @@ async function ajustarEstoque(produtoId, delta) {
 // Assume que nada mudou desde a ação; receitas usam a versão atual da ficha.
 export async function reverterLancamento(l) {
   if (!l) return
-  const qtd = l.quantidade || 0
+  const qtd = parseFloat(l.quantidade) || 0
 
   if (l.tipo === 'entrada') {
     await ajustarEstoque(l.produto_id, -qtd)
