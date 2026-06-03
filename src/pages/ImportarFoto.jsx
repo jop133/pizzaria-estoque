@@ -100,10 +100,10 @@ export function ImportarFoto() {
 
   const normalizar = s => (s || '').trim().toLowerCase()
 
-  // Item que será criado como produto novo (não cadastrado, ativo, sem ficha e
-  // a foto não é saída por ficha).
+  // Item que será criado como produto novo: só em ENTRADA (compra/reposição).
+  // Vendas e descartes apenas vinculam a produtos/fichas já existentes.
   function ehProdutoNovo(item, tipoFoto) {
-    return item.ativo && !item.produtoId && !item.fichaId && tipoFoto !== 'saida_ficha'
+    return item.ativo && !item.produtoId && !item.fichaId && tipoFoto === 'entrada'
   }
 
   // Quantos itens (em toda a fila) serão unidos no mesmo produto novo.
@@ -241,7 +241,7 @@ export function ImportarFoto() {
       setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'analisando' } : f))
       try {
         const { base64, mimeType } = await prepararImagem(foto.file)
-        const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
+        const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey, tipoLote)
         res.tipo = tipoLote // finalidade definida pelo usuário (não depende da IA)
         analisadas.push({ fotoId: foto.id, res })
       } catch (e) {
@@ -250,13 +250,16 @@ export function ImportarFoto() {
     }
 
     // 2) Agrupamento por tipo: 1 chamada SÓ DE TEXTO para todo o lote.
-    //    Falha ou limite => sem agrupamento (fallback), nunca quebra.
-    const todosNomes = analisadas.flatMap(a => (a.res.itens || []).map(it => it.nome))
+    //    Só faz sentido para criar/unir produtos (entrada e saída manual).
+    //    Em venda (saída por ficha) os itens casam com fichas: pular agrupamento.
     let mapaBase = {}
-    try {
-      mapaBase = await agruparPorTipo(todosNomes, apiKey)
-    } catch {
-      mapaBase = {}
+    if (tipoLote !== 'saida_ficha') {
+      const todosNomes = analisadas.flatMap(a => (a.res.itens || []).map(it => it.nome))
+      try {
+        mapaBase = await agruparPorTipo(todosNomes, apiKey)
+      } catch {
+        mapaBase = {}
+      }
     }
 
     // 3) Monta os itens (vínculo + peso + nomeBase) e marca as fotos como prontas.
@@ -298,7 +301,7 @@ export function ImportarFoto() {
         try {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
-          const vaiCriar = !produtoId && !fichaId && foto.resultado.tipo !== 'saida_ficha'
+          const vaiCriar = !produtoId && !fichaId && foto.resultado.tipo === 'entrada'
 
           // Unidade em que o item será contabilizado (produto existente, novo
           // com peso, ou unidade simples). Definida ANTES de criar o produto.
@@ -484,7 +487,7 @@ export function ImportarFoto() {
                       const vinculo = fichaVinculada || produtoVinculado
                       // Unidade-alvo: do produto vinculado, ou (produto novo) a base do peso lido.
                       const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
-                      const ehNovoNaoFicha = !vinculo && foto.resultado.tipo !== 'saida_ficha'
+                      const ehNovoEntrada = !vinculo && foto.resultado.tipo === 'entrada'
                       const r = (!fichaVinculada && foto.resultado.tipo !== 'saida_ficha')
                         ? calcular(item, unidadeAlvo)
                         : { converter: false, precisaPeso: false, total: null }
@@ -552,7 +555,7 @@ export function ImportarFoto() {
                                 </select>
                               </div>
                             </div>
-                          ) : ehNovoNaoFicha ? (
+                          ) : ehNovoEntrada ? (
                             <div className="ml-6 space-y-2">
                               <div className="grid grid-cols-2 gap-2">
                                 <div>
@@ -639,7 +642,7 @@ export function ImportarFoto() {
                               />
                             </div>
                           )}
-                          {!vinculo && foto.resultado.tipo !== 'saida_ficha' && (
+                          {ehNovoEntrada && (
                             <div className="ml-6">
                               <label className="label">Criar como (itens com o mesmo nome são unidos)</label>
                               <input
