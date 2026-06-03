@@ -4,6 +4,7 @@ import { analisarImagemEstoque, prepararImagem, agruparPorTipo } from '../servic
 import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../services/estoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
+import { expandirArquivosParaImagens } from '../lib/arquivos'
 import { Badge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import toast from 'react-hot-toast'
@@ -55,9 +56,26 @@ export function ImportarFoto() {
     toast.success('Chave salva!')
   }
 
-  function adicionarArquivos(e) {
-    const files = Array.from(e.target.files)
+  async function adicionarArquivos(e) {
+    const selecionados = Array.from(e.target.files)
+    e.target.value = ''
+    if (!selecionados.length) return
+
+    let files = selecionados
+    const temPdf = selecionados.some(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name))
+    if (temPdf) {
+      const t = toast.loading('Lendo arquivo(s)...')
+      try {
+        files = await expandirArquivosParaImagens(selecionados)
+      } catch {
+        toast.error('Não foi possível ler o PDF. Tente uma foto.')
+        files = selecionados.filter(f => f.type.startsWith('image/'))
+      } finally {
+        toast.dismiss(t)
+      }
+    }
     if (!files.length) return
+
     const novas = files.map(file => ({
       id: Math.random().toString(36).slice(2),
       url: URL.createObjectURL(file),
@@ -67,7 +85,6 @@ export function ImportarFoto() {
       itens: [],
     }))
     setFila(prev => [...prev, ...novas])
-    e.target.value = ''
   }
 
   function removerFoto(id) {
@@ -455,7 +472,7 @@ export function ImportarFoto() {
           <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📁 Escolher arquivos</button>
           <button onClick={() => cameraRef.current.click()} className="btn-secondary text-sm">📷 Tirar foto</button>
         </div>
-        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden" onChange={adicionarArquivos} />
+        <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
         <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
       </div>
 

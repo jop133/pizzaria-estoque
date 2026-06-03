@@ -6,6 +6,7 @@ import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
 import { registrarProducao, registrarEvento } from '../services/estoque'
 import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
+import { expandirArquivosParaImagens } from '../lib/arquivos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import toast from 'react-hot-toast'
@@ -36,11 +37,25 @@ export function FichasTecnicas() {
   const ehProducao = aba === 'producao'
 
   async function analisarFoto(e) {
-    const file = e.target.files[0]
-    if (!file) return
+    const original = e.target.files[0]
+    e.target.value = ''
+    if (!original) return
+    let file = original
+    if (original.type === 'application/pdf' || /\.pdf$/i.test(original.name)) {
+      const t = toast.loading('Lendo arquivo...')
+      try {
+        const imgs = await expandirArquivosParaImagens([original], true)
+        file = imgs[0]
+      } catch {
+        toast.error('Não foi possível ler o PDF.')
+        return
+      } finally {
+        toast.dismiss(t)
+      }
+      if (!file) return
+    }
     setFotoAnalise({ url: URL.createObjectURL(file), file })
     setResultadoFoto(null)
-    e.target.value = ''
   }
 
   async function processarFoto() {
@@ -408,7 +423,7 @@ export function FichasTecnicas() {
                 <button onClick={() => fileRefFoto.current.click()} className="btn-secondary text-sm">📁 Arquivo</button>
                 <button onClick={() => cameraRefFoto.current.click()} className="btn-secondary text-sm">📷 Câmera</button>
               </div>
-              <input ref={fileRefFoto} type="file" accept="image/*" className="hidden" onChange={analisarFoto} />
+              <input ref={fileRefFoto} type="file" accept="image/*,application/pdf" className="hidden" onChange={analisarFoto} />
               <input ref={cameraRefFoto} type="file" accept="image/*" capture="environment" className="hidden" onChange={analisarFoto} />
             </div>
 
