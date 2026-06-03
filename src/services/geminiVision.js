@@ -102,10 +102,25 @@ export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fic
   }
 }
 
-export async function analisarFichaTecnica(imageBase64, mimeType, produtos, apiKey) {
+export async function analisarFichaTecnica(imageBase64, mimeType, produtos, apiKey, tipo = 'prato') {
   const listaProdutos = produtos.map(p => `- ${p.nome} (${p.unidade})`).join('\n')
 
-  const prompt = `Analise a imagem e extraia a ficha tecnica de um prato ou pizza.
+  const prompt = tipo === 'producao'
+    ? `Analise a imagem e extraia uma FICHA TECNICA DE PRODUCAO: a receita de fabricacao de um item feito na cozinha (ex: massa, molho, recheio, base). O resultado e UM produto produzido, a partir de insumos.
+
+Produtos cadastrados no estoque:
+${listaProdutos || '(nenhum)'}
+
+Retorne SOMENTE este JSON, sem texto adicional:
+{"nome":"nome do item produzido","unidade":"kg","rendimento":1,"descricao":"descricao opcional","ingredientes":[{"nome":"nome do insumo","quantidade":0.1,"unidade":"kg","nomeCadastrado":null}],"confianca":"alta","observacao":""}
+
+Regras:
+- nome: o produto que a receita PRODUZ (o resultado final), nao um insumo.
+- unidade: a unidade do produto produzido — use SOMENTE "kg", "g", "l" ou "ml".
+- rendimento: quanto a receita rende no total (numero, na unidade acima). Se nao houver, 1.
+- ingredientes: cada insumo com quantidade (numero) e unidade. nomeCadastrado = nome exato de um produto da lista acima, ou null.
+- Use aspas duplas no JSON. confianca: "alta", "media" ou "baixa". observacao pode ser vazia.`
+    : `Analise a imagem e extraia a ficha tecnica de um prato ou pizza.
 
 Produtos cadastrados no estoque:
 ${listaProdutos || '(nenhum)'}

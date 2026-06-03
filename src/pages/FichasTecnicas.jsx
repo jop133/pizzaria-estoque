@@ -45,7 +45,7 @@ export function FichasTecnicas() {
     setAnalisando(true)
     try {
       const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
-      const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey)
+      const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey, ehProducao ? 'producao' : 'prato')
       setResultadoFoto(res)
     } catch (e) {
       toast.error(e.message || 'Erro ao analisar imagem')
@@ -90,6 +90,60 @@ export function FichasTecnicas() {
       }
     }
     toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
+    setModalFoto(false)
+    setFotoAnalise(null)
+    setResultadoFoto(null)
+  }
+
+  async function salvarFichaProducaoFoto() {
+    if (!resultadoFoto) return
+    const orgId = session.organizacaoId
+    const nome = (resultadoFoto.nome || '').trim()
+    if (!nome) return toast.error('Não foi possível identificar o nome do produto gerado')
+    const unidade = UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase())
+      ? resultadoFoto.unidade.toLowerCase() : 'kg'
+    const rendimento = parseFloat(resultadoFoto.rendimento) > 0 ? parseFloat(resultadoFoto.rendimento) : 1
+
+    // Produto gerado: cria ou reaproveita pelo nome
+    let prodGeradoId
+    const existente = produtos.find(p => p.nome.trim().toLowerCase() === nome.toLowerCase())
+    if (existente) {
+      prodGeradoId = existente.id
+      await supabase.from('produtos').update({ unidade }).eq('id', prodGeradoId)
+    } else {
+      const { data: novo, error: e1 } = await supabase
+        .from('produtos')
+        .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+        .select().single()
+      if (e1) return toast.error(e1.message)
+      prodGeradoId = novo.id
+    }
+
+    const { data: ficha, error } = await supabase
+      .from('fichas_tecnicas')
+      .insert({
+        organizacao_id: orgId, nome, categoria: 'Produção', descricao: resultadoFoto.descricao || '',
+        tipo_ficha: 'producao', produto_saida_id: prodGeradoId, rendimento,
+      })
+      .select().single()
+    if (error) return toast.error(error.message)
+
+    for (const ing of resultadoFoto.ingredientes || []) {
+      const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
+      let prod = produtos.find(p => p.nome.toLowerCase() === busca)
+      if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
+      let produtoId = prod?.id
+      if (!produtoId) {
+        const { data: novo } = await supabase
+          .from('produtos')
+          .insert({ organizacao_id: orgId, nome: ing.nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
+          .select().single()
+        produtoId = novo?.id
+      }
+      if (produtoId) await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: ing.quantidade })
+    }
+
+    toast.success(`Ficha de produção "${nome}" criada com ${(resultadoFoto.ingredientes || []).length} insumo(s)!`)
     setModalFoto(false)
     setFotoAnalise(null)
     setResultadoFoto(null)
@@ -205,9 +259,7 @@ export function FichasTecnicas() {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold text-gray-800">Fichas Técnicas</h1>
         <div className="flex gap-2">
-          {!ehProducao && (
-            <button onClick={() => setModalFoto(true)} className="btn-secondary text-sm">📷 Importar por Foto</button>
-          )}
+          <button onClick={() => setModalFoto(true)} className="btn-secondary text-sm">📷 Importar por Foto</button>
           <button onClick={abrirNovo} className="btn-primary text-sm">+ Nova Ficha</button>
         </div>
       </div>
@@ -345,10 +397,16 @@ export function FichasTecnicas() {
               <div className="space-y-3">
                 <div className="bg-gray-50 rounded-lg p-3 space-y-2">
                   <p className="font-semibold text-gray-800">{resultadoFoto.nome}</p>
+                  {ehProducao && (
+                    <p className="text-xs text-gray-600">
+                      Produz em <strong>{UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase()) ? resultadoFoto.unidade.toLowerCase() : 'kg'}</strong>
+                      {' '}· rende <strong>{parseFloat(resultadoFoto.rendimento) > 0 ? resultadoFoto.rendimento : 1}</strong> por lote
+                    </p>
+                  )}
                   <p className="text-xs text-gray-500">{resultadoFoto.descricao}</p>
                   {resultadoFoto.observacao && <p className="text-xs text-yellow-700">⚠️ {resultadoFoto.observacao}</p>}
                 </div>
-                <p className="text-xs font-medium text-gray-500 uppercase">Ingredientes identificados</p>
+                <p className="text-xs font-medium text-gray-500 uppercase">{ehProducao ? 'Insumos identificados' : 'Ingredientes identificados'}</p>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
                   {resultadoFoto.ingredientes.map((ing, i) => {
                     const prod = produtos.find(p => p.nome.toLowerCase() === (ing.nomeCadastrado || '').toLowerCase())
@@ -363,8 +421,8 @@ export function FichasTecnicas() {
                     )
                   })}
                 </div>
-                <button onClick={salvarFichaFoto} className="btn-primary w-full">
-                  ✅ Criar Ficha com {resultadoFoto.ingredientes.length} ingrediente(s)
+                <button onClick={ehProducao ? salvarFichaProducaoFoto : salvarFichaFoto} className="btn-primary w-full">
+                  ✅ Criar Ficha com {resultadoFoto.ingredientes.length} {ehProducao ? 'insumo(s)' : 'ingrediente(s)'}
                 </button>
               </div>
             )}
