@@ -411,7 +411,7 @@ function DetalheIngredientes({ ficha }) {
       toast.success(`Produzido! +${gerado} ${prodGerado?.unidade || ''} de ${prodGerado?.nome || 'produto'}`)
       setLotes('')
     } catch (e) {
-      toast.error(e.message || 'Erro ao produzir')
+      toast.error(e.message || 'Erro ao produzir', { duration: 6000 })
     } finally {
       setProduzindo(false)
     }

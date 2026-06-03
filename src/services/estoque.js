@@ -77,20 +77,44 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
   if (!ficha.produto_saida_id) throw new Error('Esta ficha de produção não tem um produto gerado definido')
   if (!ficha.rendimento || ficha.rendimento <= 0) throw new Error('Defina o rendimento da ficha de produção')
 
-  // Consome os insumos
+  // Insumos da ficha
   const { data: ingredientes } = await supabase
     .from('ficha_ingredientes')
     .select('produto_id, quantidade')
     .eq('ficha_id', fichaId)
 
-  for (const ing of ingredientes || []) {
-    const gasto = ing.quantidade * n
-    const { data: prod } = await supabase
-      .from('produtos')
-      .select('quantidade')
-      .eq('id', ing.produto_id)
-      .single()
+  if (!ingredientes || ingredientes.length === 0) {
+    throw new Error('Esta ficha de produção não tem insumos cadastrados')
+  }
+
+  // Carrega os produtos envolvidos (uma consulta) para checar e atualizar.
+  const ids = ingredientes.map(i => i.produto_id)
+  const { data: prods } = await supabase
+    .from('produtos')
+    .select('id, nome, quantidade, unidade')
+    .in('id', ids)
+  const mapaProd = Object.fromEntries((prods || []).map(p => [p.id, p]))
+
+  // PRÉ-CHECAGEM: bloqueia se faltar algum insumo (nada é alterado antes disto).
+  const faltantes = []
+  for (const ing of ingredientes) {
+    const prod = mapaProd[ing.produto_id]
+    const necessario = ing.quantidade * n
+    const disponivel = prod?.quantidade || 0
+    if (disponivel < necessario) {
+      const falta = Math.round((necessario - disponivel) * 1000) / 1000
+      faltantes.push(`${prod?.nome || 'Produto'} (falta ${falta} ${prod?.unidade || ''})`.trim())
+    }
+  }
+  if (faltantes.length > 0) {
+    throw new Error('Estoque insuficiente para produzir: ' + faltantes.join('; '))
+  }
+
+  // Consome os insumos
+  for (const ing of ingredientes) {
+    const prod = mapaProd[ing.produto_id]
     if (!prod) continue
+    const gasto = ing.quantidade * n
     await supabase
       .from('produtos')
       .update({ quantidade: Math.max(0, prod.quantidade - gasto) })
