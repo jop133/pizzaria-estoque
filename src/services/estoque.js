@@ -60,6 +60,69 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
   })
 }
 
+// Produção (ficha de produção): consome os insumos e adiciona o produto gerado
+// ao estoque. Registra um lançamento tipo 'producao' para o produto gerado.
+export async function registrarProducao(fichaId, lotes, observacao = '') {
+  const orgId = session.organizacaoId
+  if (!orgId) throw new Error('Sem organização ativa')
+  const n = parseFloat(lotes)
+  if (!n || n <= 0) throw new Error('Informe quantos lotes produzir')
+
+  const { data: ficha } = await supabase
+    .from('fichas_tecnicas')
+    .select('nome, produto_saida_id, rendimento')
+    .eq('id', fichaId)
+    .single()
+  if (!ficha) throw new Error('Ficha não encontrada')
+  if (!ficha.produto_saida_id) throw new Error('Esta ficha de produção não tem um produto gerado definido')
+  if (!ficha.rendimento || ficha.rendimento <= 0) throw new Error('Defina o rendimento da ficha de produção')
+
+  // Consome os insumos
+  const { data: ingredientes } = await supabase
+    .from('ficha_ingredientes')
+    .select('produto_id, quantidade')
+    .eq('ficha_id', fichaId)
+
+  for (const ing of ingredientes || []) {
+    const gasto = ing.quantidade * n
+    const { data: prod } = await supabase
+      .from('produtos')
+      .select('quantidade')
+      .eq('id', ing.produto_id)
+      .single()
+    if (!prod) continue
+    await supabase
+      .from('produtos')
+      .update({ quantidade: Math.max(0, prod.quantidade - gasto) })
+      .eq('id', ing.produto_id)
+  }
+
+  // Adiciona o produto gerado
+  const gerado = Math.round(ficha.rendimento * n * 1000) / 1000
+  const { data: saida } = await supabase
+    .from('produtos')
+    .select('quantidade')
+    .eq('id', ficha.produto_saida_id)
+    .single()
+  if (!saida) throw new Error('Produto gerado não encontrado')
+  await supabase
+    .from('produtos')
+    .update({ quantidade: saida.quantidade + gerado })
+    .eq('id', ficha.produto_saida_id)
+
+  await supabase.from('lancamentos').insert({
+    organizacao_id: orgId,
+    tipo: 'producao',
+    ficha_id: fichaId,
+    produto_id: ficha.produto_saida_id,
+    quantidade: gerado,
+    observacao: observacao || `Produção: ${n} lote(s) de ${ficha.nome}`,
+    user_id: session.userId,
+  })
+
+  return gerado
+}
+
 // Ajuste de inventário: define o estoque do produto para o valor contado e
 // registra a diferença no histórico (tipo 'ajuste'). Não soma/subtrai — fixa.
 export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = '') {

@@ -51,8 +51,20 @@ create table if not exists fichas_tecnicas (
   organizacao_id uuid references organizacoes(id) on delete cascade not null,
   nome text not null,
   categoria text default 'Pizza',
-  descricao text default ''
+  descricao text default '',
+  -- 'prato' (consome ingredientes na venda) ou 'producao' (fabrica um produto)
+  tipo_ficha text default 'prato',
+  -- produto gerado ao produzir (somente fichas de producao)
+  produto_saida_id bigint references produtos(id) on delete set null,
+  -- quanto cada producao rende, na unidade do produto gerado
+  rendimento numeric
 );
+
+-- Migracao para bancos ja existentes (rode uma vez no SQL Editor do Supabase):
+-- alter table fichas_tecnicas
+--   add column if not exists tipo_ficha text default 'prato',
+--   add column if not exists produto_saida_id bigint references produtos(id) on delete set null,
+--   add column if not exists rendimento numeric;
 
 -- Ingredientes das Fichas
 create table if not exists ficha_ingredientes (

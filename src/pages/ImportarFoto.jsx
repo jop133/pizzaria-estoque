@@ -26,7 +26,9 @@ const ROTULO_UNIDADE = {
 
 export function ImportarFoto() {
   const produtos = useProdutos()
-  const fichas = useFichas()
+  const todasFichas = useFichas()
+  // Apenas fichas de prato entram na importação por foto (venda)
+  const fichas = todasFichas.filter(f => (f.tipo_ficha || 'prato') === 'prato')
 
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '')
   const [editandoChave, setEditandoChave] = useState(!localStorage.getItem('gemini_api_key'))

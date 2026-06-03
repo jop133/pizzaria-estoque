@@ -12,7 +12,9 @@ const TIPOS = [
 
 export function Lancamentos() {
   const produtos = useProdutos()
-  const fichas = useFichas()
+  const todasFichas = useFichas()
+  // Apenas fichas de prato podem ser vendidas (produção não é venda)
+  const fichas = todasFichas.filter(f => (f.tipo_ficha || 'prato') === 'prato')
   const [tipo, setTipo] = useState('saida_ficha')
   const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
   const [loading, setLoading] = useState(false)
