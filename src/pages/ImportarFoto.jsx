@@ -5,6 +5,7 @@ import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { Badge } from '../components/Badge'
+import { Modal } from '../components/Modal'
 import toast from 'react-hot-toast'
 
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
@@ -16,6 +17,8 @@ const TIPOS_FOTO = [
   { value: 'saida_manual', label: '📦 Saída Manual (descarte/uso)' },
 ]
 const UNIDADES_PESO = ['kg', 'g', 'l', 'ml']
+// Item "em branco" = ativo mas sem quantidade válida (vazia ou 0).
+const itemEmBranco = (item) => !(parseFloat(item?.quantidade) > 0)
 // Unidades oferecidas ao criar um produto novo (contagem + peso direto)
 const UNIDADES_NOVO = ['un', 'pct', 'cx', 'dz', 'fardo', 'saco', 'lata', 'bandeja', 'kg', 'g', 'l', 'ml']
 const ROTULO_UNIDADE = {
@@ -37,6 +40,8 @@ export function ImportarFoto() {
   const [fila, setFila] = useState([])
   const [confirmando, setConfirmando] = useState(false)
   const [tipoLote, setTipoLote] = useState('entrada') // finalidade escolhida para as fotos
+  const [modalLancar, setModalLancar] = useState(false)
+  const [incluirBranco, setIncluirBranco] = useState(false)
 
   const fileRef = useRef()
   const cameraRef = useRef()
@@ -280,11 +285,12 @@ export function ImportarFoto() {
     }))
   }
 
-  async function confirmarTodos() {
+  async function confirmarTodos(incluirEmBranco = false) {
     const prontas = fila.filter(f => f.status === 'pronto')
     if (!prontas.length) return toast.error('Nenhuma foto analisada para confirmar')
 
     setConfirmando(true)
+    let pulados = 0
     let ok = 0
     let criados = 0
     let erros = 0
@@ -300,6 +306,8 @@ export function ImportarFoto() {
       for (let i = 0; i < foto.itens.length; i++) {
         const item = foto.itens[i]
         if (!item.ativo) continue
+        // Item em branco (sem quantidade): só lança se o usuário pediu.
+        if (!incluirEmBranco && itemEmBranco(item)) { pulados++; continue }
         try {
           let produtoId = item.produtoId
           let fichaId = item.fichaId
@@ -381,10 +389,12 @@ export function ImportarFoto() {
     }
     if (semPeso > 0) toast.error(`${semPeso} item(ns) sem peso da embalagem — preencha o peso e confirme novamente`, { duration: 5000 })
     if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados`)
+    if (pulados > 0) toast(`${pulados} item(ns) em branco não foram lançados`, { icon: '⬜' })
   }
 
   const totalProntas = fila.filter(f => f.status === 'pronto').length
   const totalItensAtivos = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo).length, 0)
+  const totalEmBranco = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo && itemEmBranco(i)).length, 0)
 
   return (
     <div className="space-y-4 max-w-lg mx-auto">
@@ -673,7 +683,7 @@ export function ImportarFoto() {
 
           {totalProntas > 0 && (
             <button
-              onClick={confirmarTodos}
+              onClick={() => { setIncluirBranco(false); setModalLancar(true) }}
               disabled={confirmando || totalItensAtivos === 0}
               className="btn-primary w-full disabled:opacity-50"
             >
@@ -681,6 +691,47 @@ export function ImportarFoto() {
             </button>
           )}
         </div>
+      )}
+
+      {modalLancar && (
+        <Modal title="Confirmar lançamento" onClose={() => setModalLancar(false)}>
+          <div className="space-y-4">
+            {totalEmBranco > 0 ? (
+              <>
+                <div className="flex gap-2 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                  <span className="text-yellow-600">⬜</span>
+                  <p className="text-sm text-yellow-800">
+                    <strong>{totalEmBranco} item(ns) estão em branco</strong> (sem quantidade).
+                    {incluirBranco
+                      ? ' Eles TAMBÉM serão lançados.'
+                      : ' Ao prosseguir, eles NÃO serão lançados.'}
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={incluirBranco}
+                    onChange={e => setIncluirBranco(e.target.checked)}
+                    className="w-4 h-4 accent-red-700"
+                  />
+                  Também lançar itens em branco?
+                </label>
+              </>
+            ) : (
+              <p className="text-sm text-gray-700">Confirmar o lançamento de <strong>{totalItensAtivos} item(ns)</strong>?</p>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setModalLancar(false)} className="btn-secondary flex-1">Voltar</button>
+              <button
+                onClick={() => { setModalLancar(false); confirmarTodos(incluirBranco) }}
+                className="btn-primary flex-1"
+              >
+                Prosseguir
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
