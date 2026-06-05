@@ -239,6 +239,67 @@ Retorne SOMENTE este JSON, com um item para CADA nome da lista:
   return mapa
 }
 
+// Leitura de uma FOLHA DE CONTAGEM de estoque (lista impressa de produtos com a
+// quantidade contada escrita à mão na coluna da direita). Uma chamada de visão
+// por foto. O vínculo com os produtos e a soma das marcas é feito depois, em JS
+// (lib/matching.js) — aqui só transcrevemos linha a linha.
+export async function analisarContagem(imageBase64, mimeType, apiKey) {
+  const prompt = `Voce le uma FOLHA DE CONTAGEM DE ESTOQUE de uma pizzaria. E uma tabela: a ESQUERDA tem o nome do produto (impresso) e a unidade; a DIREITA tem a QUANTIDADE CONTADA, normalmente escrita A MAO. Sua tarefa e transcrever cada linha fielmente. Nao interprete, nao some, nao agrupe.
+
+Para CADA linha de produto (ignore titulos/cabecalhos como "CONTROLE DE ESTOQUE", "INSUMOS", "UNIDADE"):
+- nome: o nome do produto exatamente como impresso, incluindo peso/volume se fizer parte do nome (ex: "BATATA PALITO ONE FRY PACOTE 2,5 KG", "MEL 780G", "MOLHO SHOYU 500 ML").
+- quantidade: o NUMERO escrito a mao na coluna da direita daquela MESMA linha. Celula vazia, riscada ou "O"/"o" = 0. Um numero decimal escrito (ex: "0,500", "2,980") deve ser lido como esta. Sem numero visivel = 0.
+- unidade: a unidade impressa da linha (PACOTE, BALDE, BISNAGA, UNIDADE, POTE, KG, etc.). Se nao houver, "un".
+- pesoEmbalagem: SOMENTE se o NOME tiver o peso/volume da embalagem (ex: "2,5" de "PACOTE 2,5 KG"), o NUMERO. Senao null.
+- unidadeEmbalagem: a unidade desse peso ("kg","g","ml","l") ou null.
+
+Regras: leia TODAS as linhas, de cima a baixo, sem pular nem inventar. O numero da direita pertence a linha na MESMA altura horizontal. Nao multiplique nem converta pesos.
+
+Retorne SOMENTE este JSON:
+{"itens":[{"nome":"texto da linha","quantidade":0,"unidade":"un","pesoEmbalagem":null,"unidadeEmbalagem":null}],"observacao":""}`
+
+  const body = {
+    model: MODEL,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
+        ]
+      }
+    ],
+    max_tokens: 8192,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }
+
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+  }
+
+  const data = await res.json()
+  const texto = data.choices?.[0]?.message?.content || ''
+
+  try {
+    const resultado = JSON.parse(texto)
+    if (!Array.isArray(resultado.itens)) resultado.itens = []
+    return resultado
+  } catch (e) {
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200), { cause: e })
+  }
+}
+
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
