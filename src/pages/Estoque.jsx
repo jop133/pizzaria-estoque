@@ -489,7 +489,7 @@ export function Estoque() {
             }))
             .filter(c => !buscaGrupo || c.nome.toLowerCase().includes(buscaGrupo.toLowerCase()))
           return (
-            <Modal title="Juntar com outro item da lista" onClose={() => { setPickerGrupo(null); setBuscaGrupo('') }}>
+            <Modal title="Vincular com outro item da lista" onClose={() => { setPickerGrupo(null); setBuscaGrupo('') }}>
               <div className="space-y-3">
                 <p className="text-xs text-gray-500">
                   Os itens deste produto serão movidos para o item escolhido, e o preço recalculado.
@@ -828,7 +828,7 @@ function NovoProdutoCard({
             </button>
             {onVincularLista && (
               <button onClick={onVincularLista} className="text-xs text-blue-700 underline flex items-center gap-1">
-                <ArrowLeftRight className="w-3 h-3" /> juntar com outro da lista
+                <ArrowLeftRight className="w-3 h-3" /> vincular com outro da lista
               </button>
             )}
           </div>
