@@ -37,6 +37,8 @@ export function Estoque() {
   const [buscaPicker, setBuscaPicker] = useState('')
   const [pickerGrupo, setPickerGrupo] = useState(null) // { grupoId } — juntar com outro da lista
   const [buscaGrupo, setBuscaGrupo] = useState('')
+  const [precoFiltro, setPrecoFiltro] = useState('todos') // todos | pendentes | confirmados
+  const [precoBusca, setPrecoBusca] = useState('')
 
   const filtrados = produtos.filter(p => {
     const okBusca = p.nome.toLowerCase().includes(busca.toLowerCase())
@@ -291,6 +293,8 @@ export function Estoque() {
     setBuscaPicker('')
     setPickerGrupo(null)
     setBuscaGrupo('')
+    setPrecoFiltro('todos')
+    setPrecoBusca('')
   }
 
   async function aplicarPrecos() {
@@ -346,6 +350,19 @@ export function Estoque() {
     !buscaPicker || p.nome.toLowerCase().includes(buscaPicker.toLowerCase())
   )
 
+  // Filtro de visualização da tela de confirmação
+  function passaFiltroPreco(g) {
+    if (precoBusca) {
+      const nome = (g.tipo === 'match' ? g.produtoNome : g.nomeNovo) || ''
+      if (!nome.toLowerCase().includes(precoBusca.toLowerCase())) return false
+    }
+    if (precoFiltro === 'pendentes') return !g.confirmado
+    if (precoFiltro === 'confirmados') return g.confirmado
+    return true
+  }
+  const matchFiltrados = gruposComProduto.filter(passaFiltroPreco)
+  const novosFiltrados = gruposNovos.filter(passaFiltroPreco)
+
   // ---------------------------------------------------------------------------
   // TELA DE CONFIRMAÇÃO DE PREÇOS
   // ---------------------------------------------------------------------------
@@ -382,8 +399,42 @@ export function Estoque() {
           )}
         </div>
 
+        {/* Filtros + busca */}
+        <div className="space-y-2">
+          <div className="flex gap-2">
+            {[
+              { v: 'todos', label: `Todos (${gruposVisiveis.length})` },
+              { v: 'pendentes', label: `A confirmar (${gruposVisiveis.length - totalConfirmados})` },
+              { v: 'confirmados', label: `Confirmados (${totalConfirmados})` },
+            ].map(f => (
+              <button
+                key={f.v}
+                onClick={() => setPrecoFiltro(f.v)}
+                className={`flex-1 text-xs font-medium px-2 py-2 rounded-lg border transition-colors ${
+                  precoFiltro === f.v ? 'bg-red-50 border-red-200 text-red-700' : 'bg-white border-gray-200 text-gray-600'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              placeholder="Buscar na lista..."
+              value={precoBusca}
+              onChange={e => setPrecoBusca(e.target.value)}
+              className="input pl-9"
+            />
+          </div>
+        </div>
+
+        {(matchFiltrados.length === 0 && novosFiltrados.length === 0) && (
+          <p className="text-sm text-gray-400 text-center py-8">Nenhum item neste filtro.</p>
+        )}
+
         {/* Cards de produto existente (atualizar preço) */}
-        {gruposComProduto.map(g => (
+        {matchFiltrados.map(g => (
           <PrecoCard
             key={g.id}
             grupo={g}
@@ -397,15 +448,15 @@ export function Estoque() {
         ))}
 
         {/* Produtos novos (cadastrar) */}
-        {gruposNovos.length > 0 && (
+        {novosFiltrados.length > 0 && (
           <div className="space-y-3">
             <p className="text-sm font-semibold text-blue-700 flex items-center gap-2 pt-2">
-              <span className="text-lg">+</span> Cadastrar produtos novos ({gruposNovos.length})
+              <span className="text-lg">+</span> Cadastrar produtos novos ({novosFiltrados.length})
             </p>
             <p className="text-xs text-gray-500 -mt-1">
               Não foram encontrados no estoque. Confira nome, unidade e categoria antes de cadastrar.
             </p>
-            {gruposNovos.map(g => (
+            {novosFiltrados.map(g => (
               <NovoProdutoCard
                 key={g.id}
                 grupo={g}
