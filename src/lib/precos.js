@@ -152,6 +152,46 @@ function sugerirNome(rawItens) {
   return candidatos.sort((a, b) => a.length - b.length)[0]
 }
 
+// Chave para agrupar itens SEM vínculo entre si.
+// - Vendido por PESO (coluna kg/g/l/ml): tamanhos diferentes se normalizam para
+//   o mesmo preço/kg → agrupa só pelo nome-base (ex: Linguiça 5KG + 1KG juntas).
+// - Vendido por UNIDADE (lata, unidade, pacote…): "1 unidade" de tamanhos
+//   diferentes é um produto diferente → inclui o tamanho na chave (ex: Coca lata
+//   350ml ≠ Coca 2L; com gás ≠ sem gás).
+function chaveBucket(raw) {
+  const base = chaveAgrupamento(raw.nome) || ('__' + novoId())
+  const iu = (raw.unidade || '').toLowerCase()
+  if (PESO.has(iu)) return base
+  const m = (raw.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
+  const size = m ? `${parseFloat(m[1].replace(',', '.'))}${m[2].toLowerCase()}` : ''
+  return base + '|' + size
+}
+
+// Cria um grupo 'novo' (proposta de cadastro) a partir de itens brutos do xlsx
+// ({ nome, preco, unidade, aba }). Reutilizado ao desvincular itens na tela.
+export function criarGrupoNovo(rawItens) {
+  const unidadeNova = sugerirUnidade(rawItens)
+  const itens = rawItens.map(r => construirItem(r, unidadeNova))
+  const media = mediaPrecos(itens)
+
+  // Para produtos vendidos por unidade, o tamanho faz parte da identidade —
+  // inclui no nome para não criar dois "Coca Cola Zero" indistinguíveis.
+  let nomeNovo = sugerirNome(rawItens)
+  if (!PESO.has((rawItens[0].unidade || '').toLowerCase())) {
+    const m = (rawItens[0].nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
+    if (m) nomeNovo += ` ${m[1].replace('.', ',')}${m[2].toUpperCase()}`
+  }
+
+  return {
+    id: novoId(), tipo: 'novo', produtoId: null,
+    nomeNovo,
+    unidadeNova, categoriaNova: categoriaDaAba(rawItens[0].aba),
+    confianca: 'novo', itens,
+    precoCalculado: media, preco: String(media), precoEditado: false,
+    confirmado: false, pulado: false,
+  }
+}
+
 // Núcleo: recebe os itens do xlsx + produtos do app. Devolve grupos:
 //  • tipo 'match' (produtoId definido) → atualizar preço.
 //  • tipo 'novo'  (produtoId null)     → cadastrar produto (com nome/unidade/categoria sugeridos).
@@ -185,32 +225,14 @@ export function matchearPrecos(itensXlsx, produtos) {
     g.preco = String(g.precoCalculado)
   }
 
-  // Agrupa os sem-vínculo ENTRE SI por chave (palavras significativas) e propõe
-  // cadastrar um produto por grupo.
+  // Agrupa os sem-vínculo ENTRE SI (chave ciente do tamanho) e propõe cadastrar.
   const buckets = new Map()
   for (const raw of semMatch) {
-    const chave = chaveAgrupamento(raw.nome) || ('__' + novoId())
+    const chave = chaveBucket(raw)
     if (!buckets.has(chave)) buckets.set(chave, [])
     buckets.get(chave).push(raw)
   }
-
-  const gruposNovos = []
-  for (const rawItens of buckets.values()) {
-    const unidadeNova = sugerirUnidade(rawItens)
-    const itens = rawItens.map(r => construirItem(r, unidadeNova))
-    const media = mediaPrecos(itens)
-    gruposNovos.push({
-      id: novoId(), tipo: 'novo',
-      produtoId: null,
-      nomeNovo: sugerirNome(rawItens),
-      unidadeNova,
-      categoriaNova: categoriaDaAba(rawItens[0].aba),
-      confianca: 'novo',
-      itens,
-      precoCalculado: media, preco: String(media), precoEditado: false,
-      confirmado: false, pulado: false,
-    })
-  }
+  const gruposNovos = [...buckets.values()].map(criarGrupoNovo)
 
   return [...gruposMatch, ...gruposNovos]
 }

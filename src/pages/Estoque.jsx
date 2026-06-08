@@ -6,10 +6,10 @@ import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
-import { lerXlsx, matchearPrecos, normalizarPreco, mediaPrecos } from '../lib/precos'
+import { lerXlsx, matchearPrecos, normalizarPreco, mediaPrecos, criarGrupoNovo } from '../lib/precos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
-import { Search, ArrowLeftRight } from 'lucide-react'
+import { Search, ArrowLeftRight, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
@@ -206,6 +206,39 @@ export function Estoque() {
     setBuscaPicker('')
   }
 
+  // Desvincula um grupo inteiro do produto: vira proposta de cadastro (produto novo).
+  function desvincularGrupo(grupoId) {
+    setGruposPreco(prev => prev.map(g => {
+      if (g.id !== grupoId || g.tipo !== 'match') return g
+      const raws = g.itens.map(it => ({
+        nome: it.nomeOriginal, preco: it.precoOriginal, unidade: it.unidadeOriginal, aba: it.aba,
+      }))
+      return { ...criarGrupoNovo(raws), id: g.id }
+    }))
+  }
+
+  // Remove um item (uma marca) de um grupo e o transforma num grupo 'novo' avulso.
+  function removerItemPreco(grupoId, itemId) {
+    setGruposPreco(prev => {
+      let removido = null
+      const mapeado = prev.map(g => {
+        if (g.id !== grupoId || g.itens.length <= 1) return g
+        const item = g.itens.find(it => it.id === itemId)
+        if (!item) return g
+        removido = item
+        const itens = g.itens.filter(it => it.id !== itemId)
+        const media = mediaPrecos(itens)
+        return { ...g, itens, precoCalculado: media, preco: g.precoEditado ? g.preco : String(media) }
+      })
+      if (!removido) return prev
+      const novo = criarGrupoNovo([{
+        nome: removido.nomeOriginal, preco: removido.precoOriginal,
+        unidade: removido.unidadeOriginal, aba: removido.aba,
+      }])
+      return [...mapeado, novo]
+    })
+  }
+
   // Handlers de card 'produto novo'
   function editarNomeNovo(id, valor) { patchGrupoPreco(id, { nomeNovo: valor }) }
   function editarCategoriaNova(id, valor) { patchGrupoPreco(id, { categoriaNova: valor }) }
@@ -319,6 +352,8 @@ export function Estoque() {
             key={g.id}
             grupo={g}
             onTrocar={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
+            onDesvincular={() => desvincularGrupo(g.id)}
+            onRemoverItem={itemId => removerItemPreco(g.id, itemId)}
             onEditarPreco={v => editarPrecoGrupo(g.id, v)}
             onConfirmar={() => confirmarGrupoPreco(g.id)}
             onPular={() => pularGrupoPreco(g.id)}
@@ -344,6 +379,7 @@ export function Estoque() {
                 onEditarUnidade={v => editarUnidadeNova(g.id, v)}
                 onEditarCategoria={v => editarCategoriaNova(g.id, v)}
                 onEditarPreco={v => editarPrecoGrupo(g.id, v)}
+                onRemoverItem={itemId => removerItemPreco(g.id, itemId)}
                 onVincular={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
                 onConfirmar={() => confirmarGrupoPreco(g.id)}
                 onIgnorar={() => ignorarGrupoPreco(g.id)}
@@ -573,7 +609,7 @@ export function Estoque() {
 }
 
 // Card de um produto na tela de confirmação de preços.
-function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
+function PrecoCard({ grupo, onTrocar, onDesvincular, onRemoverItem, onEditarPreco, onConfirmar, onPular }) {
   const confirmado = grupo.confirmado
   const incerto = grupo.itens.some(it => it.incerto)
   const cor = confirmado
@@ -592,15 +628,20 @@ function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
         </span>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-gray-800 leading-tight">{grupo.produtoNome}</p>
-          <button onClick={onTrocar} className="text-xs text-red-700 underline flex items-center gap-1 mt-0.5">
-            <ArrowLeftRight className="w-3 h-3" /> trocar produto
-          </button>
+          <div className="flex items-center gap-3 mt-0.5">
+            <button onClick={onTrocar} className="text-xs text-red-700 underline flex items-center gap-1">
+              <ArrowLeftRight className="w-3 h-3" /> trocar produto
+            </button>
+            <button onClick={onDesvincular} className="text-xs text-gray-500 underline">
+              desvincular
+            </button>
+          </div>
         </div>
         <span className="text-xs text-gray-400 shrink-0">{grupo.produtoUnidade}</span>
       </div>
 
       {/* Itens lidos da planilha com cálculo de normalização */}
-      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.produtoUnidade} />
+      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.produtoUnidade} onRemover={onRemoverItem} />
 
       {/* Preço médio editável */}
       <div className="flex items-center gap-2 pl-7 pt-1 border-t border-black/10">
@@ -634,24 +675,37 @@ function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
 }
 
 // Detalhamento dos itens lidos da planilha com o cálculo de normalização do preço.
-function ItensPrecoBreakdown({ itens, unidade }) {
+// Quando `onRemover` é passado e há mais de um item, mostra um × para tirar a
+// marca do grupo (vira um produto novo avulso).
+function ItensPrecoBreakdown({ itens, unidade, onRemover }) {
   return (
     <div className="space-y-1 pl-7">
       {itens.map(it => (
-        <div key={it.id} className="text-xs text-gray-600 leading-relaxed">
-          <span className="text-gray-500 truncate block">{it.nomeOriginal}</span>
-          {it.dividiu ? (
-            <span className="font-mono">
-              {formatBRL(it.precoOriginal)} ÷ {it.pesoVal} {it.pesoU} = <strong>{formatBRL(it.precoNorm)}/{unidade}</strong>
-            </span>
-          ) : it.incerto ? (
-            <span className="text-yellow-700">
-              {formatBRL(it.precoOriginal)} <span className="text-yellow-600">⚠ sem peso no nome — verifique</span>
-            </span>
-          ) : (
-            <span className="font-mono">
-              <strong>{formatBRL(it.precoNorm)}/{unidade}</strong> (direto)
-            </span>
+        <div key={it.id} className="flex items-start gap-2 text-xs text-gray-600 leading-relaxed">
+          <div className="flex-1 min-w-0">
+            <span className="text-gray-500 truncate block">{it.nomeOriginal}</span>
+            {it.dividiu ? (
+              <span className="font-mono">
+                {formatBRL(it.precoOriginal)} ÷ {it.pesoVal} {it.pesoU} = <strong>{formatBRL(it.precoNorm)}/{unidade}</strong>
+              </span>
+            ) : it.incerto ? (
+              <span className="text-yellow-700">
+                {formatBRL(it.precoOriginal)} <span className="text-yellow-600">⚠ sem peso no nome — verifique</span>
+              </span>
+            ) : (
+              <span className="font-mono">
+                <strong>{formatBRL(it.precoNorm)}/{unidade}</strong> (direto)
+              </span>
+            )}
+          </div>
+          {onRemover && itens.length > 1 && (
+            <button
+              onClick={() => onRemover(it.id)}
+              className="text-gray-300 hover:text-red-500 shrink-0 mt-0.5"
+              aria-label="Tirar do grupo"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           )}
         </div>
       ))}
@@ -662,7 +716,7 @@ function ItensPrecoBreakdown({ itens, unidade }) {
 // Card de PRODUTO NOVO (sem vínculo no estoque) — cadastrar.
 function NovoProdutoCard({
   grupo, categorias, unidades,
-  onEditarNome, onEditarUnidade, onEditarCategoria, onEditarPreco,
+  onEditarNome, onEditarUnidade, onEditarCategoria, onEditarPreco, onRemoverItem,
   onVincular, onConfirmar, onIgnorar,
 }) {
   const confirmado = grupo.confirmado
@@ -706,7 +760,7 @@ function NovoProdutoCard({
       </div>
 
       {/* Itens lidos + cálculo */}
-      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.unidadeNova} />
+      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.unidadeNova} onRemover={onRemoverItem} />
 
       {/* Preço editável */}
       <div className="flex items-center gap-2 pl-7 pt-1 border-t border-black/10">

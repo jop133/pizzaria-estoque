@@ -15,10 +15,12 @@ const PESO = new Set(['kg', 'g', 'l', 'ml'])
 
 // Palavras de embalagem/ligação que não devem "ancorar" um vínculo sozinhas.
 // Mantemos números (ex: "1", "3,5") para distinguir "Catchup 1KG" de "Catchup 3,5KG".
+// "com"/"sem" NÃO entram aqui de propósito: distinguem "com gás" de "sem gás",
+// "com sal" de "sem sal", etc.
 const STOP = new Set([
   'pacote', 'pct', 'balde', 'bisnaga', 'pote', 'unidade', 'un', 'und', 'uni',
   'lata', 'caixa', 'cx', 'garrafa', 'sache', 'vidro', 'saco', 'fardo', 'bandeja',
-  'dz', 'duzia', 'kg', 'g', 'ml', 'l', 'de', 'do', 'da', 'com', 'sem', 'e',
+  'dz', 'duzia', 'kg', 'g', 'ml', 'l', 'de', 'do', 'da', 'e',
 ])
 
 const round3 = v => Math.round((v || 0) * 1000) / 1000
@@ -267,7 +269,7 @@ export function chaveAgrupamento(nome) {
 export function sugerirNomeProduto(nome) {
   const s = String(nome || '')
     .replace(/\d+(?:[.,]\d+)?\s*(kg|g|ml|l)\b/gi, ' ')
-    .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
+    .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|unid|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
     .replace(/[^A-Za-zÀ-ÿ0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
