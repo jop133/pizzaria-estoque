@@ -9,7 +9,7 @@
 // no nome da foto (marca, embalagem) não atrapalha — só prejudica quando uma
 // palavra do produto NÃO aparece no item.
 
-import { fatorUnidade } from './unidades'
+import { fatorUnidade, extrairPeso, removerPeso } from './unidades'
 
 const PESO = new Set(['kg', 'g', 'l', 'ml'])
 
@@ -106,10 +106,10 @@ function construirItem(raw) {
   let unidadeEmbalagem = (raw.unidadeEmbalagem || '').toLowerCase()
   const temExplicito = String(pesoEmbalagem).trim() !== '' && PESO.has(unidadeEmbalagem)
   if (!temExplicito) {
-    const m = (raw.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-    if (m) {
-      pesoEmbalagem = parseFloat(m[1].replace(',', '.'))
-      unidadeEmbalagem = m[2].toLowerCase()
+    const p = extrairPeso(raw.nome)
+    if (p) {
+      pesoEmbalagem = p.valor
+      unidadeEmbalagem = p.unidade
     }
   }
   return {
@@ -259,7 +259,7 @@ export function encontrarMelhorMatch(nome, produtos) {
 // "LINGUIÇA SUÍNA 1KG" → mesma chave "linguica suina"). Remove marca/peso/
 // embalagem (STOP) e números, deixando só as palavras significativas.
 export function chaveAgrupamento(nome) {
-  const sig = tokens(nome).filter(t => !STOP.has(t) && !/^\d/.test(t))
+  const sig = tokens(removerPeso(nome)).filter(t => !STOP.has(t) && !/^\d/.test(t))
   return sig.join(' ')
 }
 
@@ -267,8 +267,7 @@ export function chaveAgrupamento(nome) {
 // peso/volume e palavras de embalagem, tira pontuação e aplica Title Case
 // (preservando acentos). Resultado é editável pelo usuário.
 export function sugerirNomeProduto(nome) {
-  const s = String(nome || '')
-    .replace(/\d+(?:[.,]\d+)?\s*(kg|g|ml|l)\b/gi, ' ')
+  const s = removerPeso(nome)
     .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|unid|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
     .replace(/[^A-Za-zÀ-ÿ0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')

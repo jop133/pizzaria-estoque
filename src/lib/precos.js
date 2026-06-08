@@ -10,13 +10,23 @@
 //
 // SheetJS é carregado de forma lazy (só baixa quando o usuário abre um xlsx).
 
-import { fatorUnidade } from './unidades'
+import { fatorUnidade, extrairPeso } from './unidades'
 import { encontrarMelhorMatch, chaveAgrupamento, sugerirNomeProduto } from './matching'
 
 const PESO = new Set(['kg', 'g', 'l', 'ml'])
 const ABAS_IGNORAR = new Set(['COMPRAS SEM NOTA FISCAL'])
 const round3 = v => Math.round((v || 0) * 1000) / 1000
 const novoId = () => Math.random().toString(36).slice(2)
+
+// Um item é "discreto" (contado por unidade individual) quando a coluna do xlsx
+// diz UNIDADE ou quando é uma BEBIDA. Nesses casos, tamanhos diferentes são
+// produtos diferentes (lata 350ml ≠ garrafa 2L) e o preço fica POR UNIDADE.
+// Caso contrário (ingrediente embalado: pacote/caixa/balde com peso no nome),
+// o preço é normalizado POR PESO (kg/L) e tamanhos diferentes se agrupam.
+function ehDiscreto(raw) {
+  const u = (raw.unidade || '').toLowerCase()
+  return u.startsWith('unidade') || u === 'un' || raw.aba === 'BEBIDAS'
+}
 
 // Categoria padrão sugerida a partir da aba de origem (editável depois).
 const CATEGORIA_ABA = {
@@ -74,16 +84,12 @@ export function normalizarPreco(preco, nomeItem, itemUnidade, unidadeAlvo) {
     return { precoNorm: round3(preco), incerto: false, dividiu: false }
   }
 
-  // 1) Peso no nome (ex: "2,5 KG", "500G", "5KG") → divide pelo tamanho da embalagem.
-  const m = (nomeItem || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-  if (m) {
-    const pesoVal = parseFloat(m[1].replace(',', '.'))
-    const pesoU = m[2].toLowerCase()
-    if (pesoVal) {
-      return {
-        precoNorm: round3(preco / (pesoVal * fatorUnidade(pesoU, pu))),
-        incerto: false, dividiu: true, pesoVal, pesoU,
-      }
+  // 1) Peso no nome (ex: "2,5 KG", "500G", "100 GRAMAS", "200GR") → divide pelo tamanho.
+  const p = extrairPeso(nomeItem)
+  if (p) {
+    return {
+      precoNorm: round3(preco / (p.valor * fatorUnidade(p.unidade, pu))),
+      incerto: false, dividiu: true, pesoVal: p.valor, pesoU: p.unidade,
     }
   }
 
@@ -122,26 +128,22 @@ export function mediaPrecos(itens) {
 }
 
 // Unidade sugerida para um produto novo, a partir dos itens do grupo.
-// Sinais discretos da coluna do xlsx (unidade/caixa/fardo) têm prioridade: um
-// item "COCA-COLA LATA 350ML" marcado como UNIDADE deve virar 'un' (preço por
-// lata), e não 'L'. Só quando não há sinal discreto é que o peso no nome define
-// a base (kg/L), permitindo a divisão por embalagem.
+// - Item por PESO (ingrediente embalado): usa a base do peso no nome (kg/L),
+//   permitindo a divisão por embalagem (ex: Batata Palha 100g → kg).
+// - Item DISCRETO (unidade/bebida): conta por unidade/embalagem (un, cx…).
 function sugerirUnidade(rawItens) {
   const u0 = (rawItens[0].unidade || '').toLowerCase()
-  if (u0.startsWith('unidade') || u0 === 'un') return 'un'
-  if (u0.startsWith('caixa') || u0 === 'cx') return 'cx'
-  if (u0.startsWith('fardo')) return 'fardo'
 
-  for (const it of rawItens) {
-    const m = (it.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-    if (m) {
-      const u = m[2].toLowerCase()
-      if (u === 'g' || u === 'kg') return 'kg'
-      if (u === 'ml' || u === 'l') return 'L'
+  if (!ehDiscreto(rawItens[0])) {
+    for (const it of rawItens) {
+      const p = extrairPeso(it.nome)
+      if (p) return (p.unidade === 'g' || p.unidade === 'kg') ? 'kg' : 'L'
     }
   }
-  if (u0.startsWith('kg') || u0 === 'kg') return 'kg'
+  if (u0.startsWith('caixa') || u0 === 'cx') return 'cx'
+  if (u0.startsWith('fardo')) return 'fardo'
   if (u0.startsWith('pacote') || u0 === 'pct') return 'pct'
+  if (u0.startsWith('kg') || u0 === 'kg') return 'kg'
   return 'un'
 }
 
@@ -153,17 +155,16 @@ function sugerirNome(rawItens) {
 }
 
 // Chave para agrupar itens SEM vínculo entre si.
-// - Vendido por PESO (coluna kg/g/l/ml): tamanhos diferentes se normalizam para
-//   o mesmo preço/kg → agrupa só pelo nome-base (ex: Linguiça 5KG + 1KG juntas).
-// - Vendido por UNIDADE (lata, unidade, pacote…): "1 unidade" de tamanhos
-//   diferentes é um produto diferente → inclui o tamanho na chave (ex: Coca lata
-//   350ml ≠ Coca 2L; com gás ≠ sem gás).
+// - Por PESO (ingrediente embalado): tamanhos diferentes se normalizam para o
+//   mesmo preço/kg → agrupa só pelo nome-base (ex: Batata Palha 100g…900g e
+//   Linguiça 5KG+1KG juntas).
+// - DISCRETO (unidade/bebida): "1 unidade" de tamanhos diferentes é um produto
+//   diferente → inclui o tamanho na chave (Coca lata 350ml ≠ Coca 2L).
 function chaveBucket(raw) {
   const base = chaveAgrupamento(raw.nome) || ('__' + novoId())
-  const iu = (raw.unidade || '').toLowerCase()
-  if (PESO.has(iu)) return base
-  const m = (raw.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-  const size = m ? `${parseFloat(m[1].replace(',', '.'))}${m[2].toLowerCase()}` : ''
+  if (!ehDiscreto(raw)) return base
+  const p = extrairPeso(raw.nome)
+  const size = p ? `${p.valor}${p.unidade}` : ''
   return base + '|' + size
 }
 
@@ -174,12 +175,16 @@ export function criarGrupoNovo(rawItens) {
   const itens = rawItens.map(r => construirItem(r, unidadeNova))
   const media = mediaPrecos(itens)
 
-  // Para produtos vendidos por unidade, o tamanho faz parte da identidade —
-  // inclui no nome para não criar dois "Coca Cola Zero" indistinguíveis.
+  // Para produtos discretos (vendidos por unidade), o tamanho faz parte da
+  // identidade — inclui no nome para não criar dois "Coca Cola Zero" iguais.
+  // Para itens por peso (agrupados), NÃO inclui (o nome-base é o produto).
   let nomeNovo = sugerirNome(rawItens)
-  if (!PESO.has((rawItens[0].unidade || '').toLowerCase())) {
-    const m = (rawItens[0].nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-    if (m) nomeNovo += ` ${m[1].replace('.', ',')}${m[2].toUpperCase()}`
+  if (ehDiscreto(rawItens[0])) {
+    const p = extrairPeso(rawItens[0].nome)
+    if (p) {
+      const rotulo = { g: 'G', kg: 'KG', ml: 'ML', l: 'L' }[p.unidade] || p.unidade.toUpperCase()
+      nomeNovo += ` ${String(p.valor).replace('.', ',')}${rotulo}`
+    }
   }
 
   return {
