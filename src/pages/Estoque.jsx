@@ -7,6 +7,7 @@ import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
 import { lerXlsx, matchearPrecos, normalizarPreco, mediaPrecos, criarGrupoNovo } from '../lib/precos'
+import { agruparPorTipo } from '../services/geminiVision'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import { Search, ArrowLeftRight, X } from 'lucide-react'
@@ -152,7 +153,18 @@ export function Estoque() {
         setPrecoFase('idle')
         return
       }
-      const grupos = matchearPrecos(itens, produtos)
+      // Agrupamento por marca via IA (1 chamada de texto). Remove marca/peso e
+      // mantém o tipo, p/ unir "Batata Palito UAI/MC CAIN" e separar "70%/40%".
+      // Sem chave ou em caso de falha, cai no agrupamento heurístico local.
+      let mapaBase = {}
+      const apiKey = localStorage.getItem('gemini_api_key') || ''
+      if (apiKey) {
+        toast.loading('Agrupando por tipo (IA)...', { id: t })
+        try {
+          mapaBase = await agruparPorTipo(itens.map(i => i.nome), apiKey)
+        } catch { mapaBase = {} }
+      }
+      const grupos = matchearPrecos(itens, produtos, mapaBase)
       setGruposPreco(grupos)
       setPrecoFase('confirmando')
       toast.dismiss(t)

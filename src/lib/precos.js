@@ -18,14 +18,39 @@ const ABAS_IGNORAR = new Set(['COMPRAS SEM NOTA FISCAL'])
 const round3 = v => Math.round((v || 0) * 1000) / 1000
 const novoId = () => Math.random().toString(36).slice(2)
 
-// Um item é "discreto" (contado por unidade individual) quando a coluna do xlsx
-// diz UNIDADE ou quando é uma BEBIDA. Nesses casos, tamanhos diferentes são
-// produtos diferentes (lata 350ml ≠ garrafa 2L) e o preço fica POR UNIDADE.
-// Caso contrário (ingrediente embalado: pacote/caixa/balde com peso no nome),
-// o preço é normalizado POR PESO (kg/L) e tamanhos diferentes se agrupam.
-function ehDiscreto(raw) {
-  const u = (raw.unidade || '').toLowerCase()
-  return u.startsWith('unidade') || u === 'un' || raw.aba === 'BEBIDAS'
+// Abas cujos itens são contados por UNIDADE individual (garrafa, lata, frasco,
+// embalagem descartável). Aí tamanhos diferentes são produtos diferentes
+// (Coca lata 350ml ≠ Coca 2L) e o preço fica por unidade. Nas demais abas
+// (ingredientes), itens de tamanhos diferentes do mesmo produto se normalizam
+// por peso (kg/L) — ex: Batata Palito 2kg + 2,5kg, Catchup 400g + 1kg.
+const ABAS_DISCRETAS = new Set(['BEBIDAS', 'DESCARTÁVEIS E LIMPEZA'])
+const ehAbaDiscreta = aba => ABAS_DISCRETAS.has(aba)
+
+// Nome-base do item: usa o agrupamento semântico da IA (mapaBase: nome→base,
+// que remove marca/peso/embalagem mantendo o tipo). Sem IA, cai no heurístico.
+function baseDe(raw, mapaBase) {
+  const b = (mapaBase[(raw.nome || '').trim()] || '').trim()
+  if (b) return b.toLowerCase()
+  return chaveAgrupamento(raw.nome) || ('__' + novoId())
+}
+
+// Pesos distintos (normalizados a g/ml) entre os itens de um grupo. Serve para
+// decidir se o produto deve ser medido por peso: marcas com tamanhos diferentes
+// (2kg vs 2,5kg) → preço por kg; tamanhos iguais ou ausentes → por unidade.
+function pesosDistintos(rawItens) {
+  const set = new Set()
+  let temVolume = false
+  for (const it of rawItens) {
+    const p = extrairPeso(it.nome)
+    if (!p) continue
+    if (p.unidade === 'ml' || p.unidade === 'l') {
+      temVolume = true
+      set.add('v' + Math.round(p.valor * fatorUnidade(p.unidade, 'ml')))
+    } else {
+      set.add('p' + Math.round(p.valor * fatorUnidade(p.unidade, 'g')))
+    }
+  }
+  return { distintos: set.size, temVolume }
 }
 
 // Categoria padrão sugerida a partir da aba de origem (editável depois).
@@ -127,59 +152,57 @@ export function mediaPrecos(itens) {
   return round3(base.reduce((s, it) => s + it.precoNorm, 0) / base.length)
 }
 
-// Unidade sugerida para um produto novo, a partir dos itens do grupo.
-// - Item por PESO (ingrediente embalado): usa a base do peso no nome (kg/L),
-//   permitindo a divisão por embalagem (ex: Batata Palha 100g → kg).
-// - Item DISCRETO (unidade/bebida): conta por unidade/embalagem (un, cx…).
-function sugerirUnidade(rawItens) {
-  const u0 = (rawItens[0].unidade || '').toLowerCase()
-
-  if (!ehDiscreto(rawItens[0])) {
-    for (const it of rawItens) {
-      const p = extrairPeso(it.nome)
-      if (p) return (p.unidade === 'g' || p.unidade === 'kg') ? 'kg' : 'L'
-    }
-  }
-  if (u0.startsWith('caixa') || u0 === 'cx') return 'cx'
-  if (u0.startsWith('fardo')) return 'fardo'
-  if (u0.startsWith('pacote') || u0 === 'pct') return 'pct'
-  if (u0.startsWith('kg') || u0 === 'kg') return 'kg'
+// Unidade do produto novo a partir dos itens do grupo:
+// - Aba discreta (bebida/descartável) → conta por unidade/embalagem.
+// - Itens com pesos DIFERENTES (2kg vs 2,5kg) → normaliza por peso (kg/L).
+// - Pesos iguais ou ausentes → unidade da coluna (un/pct/cx…).
+function unidadeDaColuna(raw) {
+  const u = (raw.unidade || '').toLowerCase()
+  if (u.startsWith('caixa') || u === 'cx') return 'cx'
+  if (u.startsWith('fardo')) return 'fardo'
+  if (u.startsWith('pacote') || u === 'pct') return 'pct'
+  if (u.startsWith('kg') || u === 'kg') return 'kg'
   return 'un'
 }
-
-// Nome sugerido: o mais "limpo" (mais curto após remover marca/peso) do grupo.
-function sugerirNome(rawItens) {
-  const candidatos = rawItens.map(it => sugerirNomeProduto(it.nome)).filter(Boolean)
-  if (candidatos.length === 0) return sugerirNomeProduto(rawItens[0].nome) || rawItens[0].nome
-  return candidatos.sort((a, b) => a.length - b.length)[0]
+function decidirUnidade(rawItens) {
+  if (!ehAbaDiscreta(rawItens[0].aba)) {
+    const { distintos, temVolume } = pesosDistintos(rawItens)
+    if (distintos >= 2) return temVolume ? 'L' : 'kg'
+  }
+  return unidadeDaColuna(rawItens[0])
 }
 
-// Chave para agrupar itens SEM vínculo entre si.
-// - Por PESO (ingrediente embalado): tamanhos diferentes se normalizam para o
-//   mesmo preço/kg → agrupa só pelo nome-base (ex: Batata Palha 100g…900g e
-//   Linguiça 5KG+1KG juntas).
-// - DISCRETO (unidade/bebida): "1 unidade" de tamanhos diferentes é um produto
-//   diferente → inclui o tamanho na chave (Coca lata 350ml ≠ Coca 2L).
-function chaveBucket(raw) {
-  const base = chaveAgrupamento(raw.nome) || ('__' + novoId())
-  if (!ehDiscreto(raw)) return base
+// Nome do grupo: usa o nome-base da IA (já sem marca/peso); sem IA, cai no
+// heurístico de limpeza. Aplica Title Case leve.
+function nomeDoGrupo(rawItens, mapaBase) {
+  const b = (mapaBase[(rawItens[0].nome || '').trim()] || '').trim()
+  if (b) return sugerirNomeProduto(b) || b
+  const candidatos = rawItens.map(it => sugerirNomeProduto(it.nome)).filter(Boolean)
+  if (candidatos.length === 0) return sugerirNomeProduto(rawItens[0].nome) || rawItens[0].nome
+  return candidatos.sort((a, b2) => a.length - b2.length)[0]
+}
+
+// Chave para agrupar itens SEM vínculo entre si, usando o nome-base da IA.
+// Em abas discretas (bebida/descartável), o tamanho entra na chave para manter
+// tamanhos diferentes separados (Coca 350ml ≠ Coca 2L).
+function chaveBucket(raw, mapaBase) {
+  const base = baseDe(raw, mapaBase)
+  if (!ehAbaDiscreta(raw.aba)) return base
   const p = extrairPeso(raw.nome)
-  const size = p ? `${p.valor}${p.unidade}` : ''
-  return base + '|' + size
+  return base + '|' + (p ? `${p.valor}${p.unidade}` : '')
 }
 
 // Cria um grupo 'novo' (proposta de cadastro) a partir de itens brutos do xlsx
 // ({ nome, preco, unidade, aba }). Reutilizado ao desvincular itens na tela.
-export function criarGrupoNovo(rawItens) {
-  const unidadeNova = sugerirUnidade(rawItens)
+export function criarGrupoNovo(rawItens, mapaBase = {}) {
+  const unidadeNova = decidirUnidade(rawItens)
   const itens = rawItens.map(r => construirItem(r, unidadeNova))
   const media = mediaPrecos(itens)
 
-  // Para produtos discretos (vendidos por unidade), o tamanho faz parte da
-  // identidade — inclui no nome para não criar dois "Coca Cola Zero" iguais.
-  // Para itens por peso (agrupados), NÃO inclui (o nome-base é o produto).
-  let nomeNovo = sugerirNome(rawItens)
-  if (ehDiscreto(rawItens[0])) {
+  // Em abas discretas, o tamanho faz parte da identidade — inclui no nome para
+  // não criar dois "Coca Cola Zero" iguais. Por peso (agrupado) o nome-base basta.
+  let nomeNovo = nomeDoGrupo(rawItens, mapaBase)
+  if (ehAbaDiscreta(rawItens[0].aba)) {
     const p = extrairPeso(rawItens[0].nome)
     if (p) {
       const rotulo = { g: 'G', kg: 'KG', ml: 'ML', l: 'L' }[p.unidade] || p.unidade.toUpperCase()
@@ -197,10 +220,11 @@ export function criarGrupoNovo(rawItens) {
   }
 }
 
-// Núcleo: recebe os itens do xlsx + produtos do app. Devolve grupos:
-//  • tipo 'match' (produtoId definido) → atualizar preço.
-//  • tipo 'novo'  (produtoId null)     → cadastrar produto (com nome/unidade/categoria sugeridos).
-export function matchearPrecos(itensXlsx, produtos) {
+// Núcleo: recebe os itens do xlsx, os produtos do app e (opcional) o mapaBase da
+// IA (nome→nome-base, para agrupar marcas). Devolve grupos:
+//  • tipo 'match' → atualizar preço de produto existente.
+//  • tipo 'novo'  → cadastrar produto (nome/unidade/categoria sugeridos).
+export function matchearPrecos(itensXlsx, produtos, mapaBase = {}) {
   const gruposMatch = []
   const porProduto = new Map()
   const semMatch = []
@@ -230,14 +254,14 @@ export function matchearPrecos(itensXlsx, produtos) {
     g.preco = String(g.precoCalculado)
   }
 
-  // Agrupa os sem-vínculo ENTRE SI (chave ciente do tamanho) e propõe cadastrar.
+  // Agrupa os sem-vínculo ENTRE SI pelo nome-base (IA) e propõe cadastrar.
   const buckets = new Map()
   for (const raw of semMatch) {
-    const chave = chaveBucket(raw)
+    const chave = chaveBucket(raw, mapaBase)
     if (!buckets.has(chave)) buckets.set(chave, [])
     buckets.get(chave).push(raw)
   }
-  const gruposNovos = [...buckets.values()].map(criarGrupoNovo)
+  const gruposNovos = [...buckets.values()].map(rawItens => criarGrupoNovo(rawItens, mapaBase))
 
   return [...gruposMatch, ...gruposNovos]
 }

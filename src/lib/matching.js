@@ -258,8 +258,10 @@ export function encontrarMelhorMatch(nome, produtos) {
 // Chave para agrupar itens SEM vínculo entre si (ex: "LINGUIÇA SUÍNA 5KG" e
 // "LINGUIÇA SUÍNA 1KG" → mesma chave "linguica suina"). Remove marca/peso/
 // embalagem (STOP) e números, deixando só as palavras significativas.
+// removerPeso já tira os pesos; o que sobra de número (ex: "70%" → "70",
+// percentual de cacau) é diferenciador significativo e deve ser mantido.
 export function chaveAgrupamento(nome) {
-  const sig = tokens(removerPeso(nome)).filter(t => !STOP.has(t) && !/^\d/.test(t))
+  const sig = tokens(removerPeso(nome)).filter(t => !STOP.has(t))
   return sig.join(' ')
 }
 
@@ -269,7 +271,7 @@ export function chaveAgrupamento(nome) {
 export function sugerirNomeProduto(nome) {
   const s = removerPeso(nome)
     .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|unid|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
-    .replace(/[^A-Za-zÀ-ÿ0-9\s]/g, ' ')
+    .replace(/[^A-Za-zÀ-ÿ0-9%\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
   return s.split(' ').filter(Boolean)
