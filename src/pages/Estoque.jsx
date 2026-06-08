@@ -6,8 +6,10 @@ import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
+import { lerXlsx, matchearPrecos, normalizarPreco } from '../lib/precos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
+import { Search, ArrowLeftRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
@@ -25,6 +27,13 @@ export function Estoque() {
   const [filtroCategoria, setFiltroCategoria] = useState('')
   const [selecionados, setSelecionados] = useState(new Set())
   const fileRef = useRef()
+  const xlsxRef = useRef()
+
+  // --- Fluxo de importação de preços via xlsx ---
+  const [precoFase, setPrecoFase] = useState('idle') // idle | lendo | confirmando | aplicando
+  const [gruposPreco, setGruposPreco] = useState([])
+  const [pickerPreco, setPickerPreco] = useState(null) // { grupoId }
+  const [buscaPicker, setBuscaPicker] = useState('')
 
   const filtrados = produtos.filter(p => {
     const okBusca = p.nome.toLowerCase().includes(busca.toLowerCase())
@@ -125,17 +134,251 @@ export function Estoque() {
     e.target.value = ''
   }
 
+  // ---------------------------------------------------------------------------
+  // Importação de preços via xlsx
+  // ---------------------------------------------------------------------------
+
+  async function lerArquivoPrecos(e) {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    setPrecoFase('lendo')
+    const t = toast.loading('Lendo planilha...')
+    try {
+      const itens = await lerXlsx(file)
+      if (itens.length === 0) {
+        toast.dismiss(t)
+        toast.error('Nenhum produto com preço encontrado na planilha.')
+        setPrecoFase('idle')
+        return
+      }
+      const grupos = matchearPrecos(itens, produtos)
+      setGruposPreco(grupos)
+      setPrecoFase('confirmando')
+      toast.dismiss(t)
+      toast.success(`${itens.length} item(ns) lido(s). Confira antes de salvar.`)
+    } catch (err) {
+      toast.dismiss(t)
+      toast.error('Erro ao ler planilha: ' + (err?.message || 'verifique o arquivo'), { duration: 6000 })
+      setPrecoFase('idle')
+    }
+  }
+
+  function patchGrupoPreco(id, patch) {
+    setGruposPreco(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g))
+  }
+
+  function confirmarGrupoPreco(id) { patchGrupoPreco(id, { confirmado: true }) }
+  function pularGrupoPreco(id)     { patchGrupoPreco(id, { pulado: true, confirmado: false }) }
+  function ignorarGrupoPreco(id)   { setGruposPreco(prev => prev.filter(g => g.id !== id)) }
+
+  function editarPrecoGrupo(id, valor) {
+    setGruposPreco(prev => prev.map(g => g.id === id ? { ...g, preco: valor, precoEditado: true } : g))
+  }
+
+  function confirmarTodosAltosPreco() {
+    setGruposPreco(prev => prev.map(g =>
+      (g.produtoId && !g.pulado && g.confianca === 'alta') ? { ...g, confirmado: true } : g
+    ))
+  }
+
+  function escolherProdutoPreco(grupoId, produto) {
+    setGruposPreco(prev => prev.map(g => {
+      if (g.id !== grupoId) return g
+      const itens = g.itens.map(it => {
+        const n = normalizarPreco(it.precoOriginal, it.nomeOriginal, it.unidadeOriginal, produto.unidade)
+        return { ...it, precoNorm: n.precoNorm, incerto: n.incerto, dividiu: n.dividiu, pesoVal: n.pesoVal, pesoU: n.pesoU }
+      })
+      const validos = itens.filter(it => !it.incerto)
+      const base = validos.length > 0 ? validos : itens
+      const media = Math.round(base.reduce((s, it) => s + it.precoNorm, 0) / base.length * 1000) / 1000
+      return {
+        ...g, itens,
+        produtoId: produto.id, produtoNome: produto.nome, produtoUnidade: produto.unidade,
+        confianca: 'alta', precoCalculado: media,
+        preco: String(media), precoEditado: false,
+      }
+    }))
+    setPickerPreco(null)
+    setBuscaPicker('')
+  }
+
+  function fecharPrecos() {
+    setGruposPreco([])
+    setPrecoFase('idle')
+    setPickerPreco(null)
+    setBuscaPicker('')
+  }
+
+  async function aplicarPrecos() {
+    const aplicaveis = gruposPreco.filter(g => g.confirmado && g.produtoId)
+    if (aplicaveis.length === 0) return toast.error('Confirme ao menos um produto antes de aplicar.')
+    setPrecoFase('aplicando')
+    let ok = 0, erros = 0
+    for (const g of aplicaveis) {
+      const v = parseFloat(String(g.preco).replace(',', '.'))
+      if (isNaN(v) || v < 0) { erros++; continue }
+      const { error } = await supabase.from('produtos').update({ preco: v }).eq('id', g.produtoId)
+      if (error) erros++
+      else ok++
+    }
+    if (ok > 0) toast.success(`${ok} preço(s) atualizado(s)!`)
+    if (erros > 0) toast.error(`${erros} produto(s) não puderam ser atualizados.`)
+    fecharPrecos()
+  }
+
+  const gruposVisiveis    = gruposPreco.filter(g => !g.pulado)
+  const gruposComProduto  = gruposVisiveis.filter(g => g.produtoId)
+  const gruposSemMatch    = gruposVisiveis.filter(g => !g.produtoId)
+  const confirmadosPreco  = gruposComProduto.filter(g => g.confirmado)
+  const altosPreco        = gruposComProduto.filter(g => g.confianca === 'alta' && !g.confirmado)
+  const produtosPicker    = produtos.filter(p =>
+    !buscaPicker || p.nome.toLowerCase().includes(buscaPicker.toLowerCase())
+  )
+
+  // ---------------------------------------------------------------------------
+  // TELA DE CONFIRMAÇÃO DE PREÇOS
+  // ---------------------------------------------------------------------------
+  if (precoFase === 'confirmando' || precoFase === 'aplicando') {
+    return (
+      <div className="space-y-4 max-w-lg mx-auto pb-28">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold text-gray-800">Conferir preços</h1>
+          <button onClick={fecharPrecos} className="text-sm text-gray-500 underline">Cancelar</button>
+        </div>
+
+        {/* Resumo + ações em massa */}
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <p className="text-sm text-gray-600">
+            <strong>{gruposComProduto.length}</strong> produto(s) identificado(s).
+            Confira cada preço e toque em <strong>Confirmar</strong>.
+          </p>
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className="bg-green-50 text-green-700 px-2 py-1 rounded-full">✓ {confirmadosPreco.length} confirmados</span>
+            {gruposComProduto.filter(g => g.confianca === 'media' && !g.confirmado).length > 0 && (
+              <span className="bg-yellow-50 text-yellow-700 px-2 py-1 rounded-full">
+                ? {gruposComProduto.filter(g => g.confianca === 'media' && !g.confirmado).length} revisar
+              </span>
+            )}
+            {gruposSemMatch.length > 0 && (
+              <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full">✕ {gruposSemMatch.length} sem produto</span>
+            )}
+          </div>
+          {altosPreco.length > 0 && (
+            <button onClick={confirmarTodosAltosPreco} className="btn-secondary w-full text-sm">
+              ✓ Confirmar os {altosPreco.length} com alta confiança
+            </button>
+          )}
+        </div>
+
+        {/* Cards de produto */}
+        {gruposComProduto.map(g => (
+          <PrecoCard
+            key={g.id}
+            grupo={g}
+            onTrocar={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
+            onEditarPreco={v => editarPrecoGrupo(g.id, v)}
+            onConfirmar={() => confirmarGrupoPreco(g.id)}
+            onPular={() => pularGrupoPreco(g.id)}
+          />
+        ))}
+
+        {/* Sem match */}
+        {gruposSemMatch.length > 0 && (
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
+            <p className="text-sm font-semibold text-gray-500">✕ Sem produto no estoque</p>
+            {gruposSemMatch.map(g => (
+              <div key={g.id} className="bg-white border border-gray-200 rounded-lg p-3">
+                <p className="text-sm font-medium text-gray-800 truncate">{g.itens[0]?.nomeOriginal}</p>
+                <p className="text-xs text-gray-500 mb-2">{formatBRL(g.itens[0]?.precoOriginal)}</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
+                    className="btn-secondary text-xs flex-1"
+                  >
+                    Vincular a produto
+                  </button>
+                  <button onClick={() => ignorarGrupoPreco(g.id)} className="btn-secondary text-xs flex-1">
+                    Ignorar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Rodapé fixo */}
+        <div className="fixed bottom-16 left-0 right-0 p-3 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent">
+          <div className="max-w-lg mx-auto">
+            <button
+              onClick={aplicarPrecos}
+              disabled={precoFase === 'aplicando' || confirmadosPreco.length === 0}
+              className="btn-primary w-full text-base py-3 disabled:opacity-50 shadow-lg"
+            >
+              {precoFase === 'aplicando'
+                ? 'Salvando...'
+                : `Salvar ${confirmadosPreco.length} preço(s) no estoque`}
+            </button>
+          </div>
+        </div>
+
+        {/* Seletor de produto */}
+        {pickerPreco && (
+          <Modal title="Escolher produto" onClose={() => { setPickerPreco(null); setBuscaPicker('') }}>
+            <div className="space-y-3">
+              <div className="relative">
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  autoFocus
+                  placeholder="Buscar produto..."
+                  value={buscaPicker}
+                  onChange={e => setBuscaPicker(e.target.value)}
+                  className="input pl-9"
+                />
+              </div>
+              <div className="max-h-80 overflow-y-auto divide-y divide-gray-100">
+                {produtosPicker.length === 0 ? (
+                  <p className="text-sm text-gray-400 py-6 text-center">Nenhum produto encontrado.</p>
+                ) : produtosPicker.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => escolherProdutoPreco(pickerPreco.grupoId, p)}
+                    className="w-full text-left py-3 px-1 hover:bg-gray-50 transition-colors"
+                  >
+                    <span className="text-sm font-medium text-gray-800">{p.nome}</span>
+                    <span className="text-xs text-gray-400 ml-2">{p.unidade}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </Modal>
+        )}
+      </div>
+    )
+  }
+
+  // ---------------------------------------------------------------------------
+  // TELA NORMAL DO ESTOQUE
+  // ---------------------------------------------------------------------------
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold text-gray-800">Estoque</h1>
         <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => xlsxRef.current.click()}
+            disabled={precoFase === 'lendo'}
+            className="btn-secondary text-sm disabled:opacity-50"
+          >
+            💰 {precoFase === 'lendo' ? 'Lendo...' : 'Importar Preços'}
+          </button>
           <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📥 Importar CSV</button>
           <button onClick={() => exportarEstoqueCSV(filtrados)} className="btn-secondary text-sm">📤 CSV</button>
           <button onClick={() => exportarEstoquePDF(filtrados)} className="btn-secondary text-sm">📄 PDF</button>
           <button onClick={abrirNovo} className="btn-primary text-sm">+ Novo Produto</button>
         </div>
         <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importar} />
+        <input ref={xlsxRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={lerArquivoPrecos} />
       </div>
 
       <div className="flex gap-2 flex-wrap">
@@ -277,6 +520,86 @@ export function Estoque() {
           </div>
         </Modal>
       )}
+    </div>
+  )
+}
+
+// Card de um produto na tela de confirmação de preços.
+function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
+  const confirmado = grupo.confirmado
+  const incerto = grupo.itens.some(it => it.incerto)
+  const cor = confirmado
+    ? 'border-green-300 bg-green-50'
+    : grupo.confianca === 'media' || incerto
+      ? 'border-yellow-300 bg-yellow-50'
+      : 'border-gray-200 bg-white'
+  const badge = confirmado ? '✓' : grupo.confianca === 'media' ? '?' : '✓'
+
+  return (
+    <div className={`border rounded-xl p-4 space-y-3 ${cor}`}>
+      {/* Cabeçalho */}
+      <div className="flex items-start gap-2">
+        <span className={`text-lg font-bold ${confirmado ? 'text-green-600' : grupo.confianca === 'media' ? 'text-yellow-600' : 'text-gray-400'}`}>
+          {badge}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="font-semibold text-gray-800 leading-tight">{grupo.produtoNome}</p>
+          <button onClick={onTrocar} className="text-xs text-red-700 underline flex items-center gap-1 mt-0.5">
+            <ArrowLeftRight className="w-3 h-3" /> trocar produto
+          </button>
+        </div>
+        <span className="text-xs text-gray-400 shrink-0">{grupo.produtoUnidade}</span>
+      </div>
+
+      {/* Itens lidos da planilha com cálculo de normalização */}
+      <div className="space-y-1 pl-7">
+        {grupo.itens.map(it => (
+          <div key={it.id} className="text-xs text-gray-600 leading-relaxed">
+            <span className="text-gray-500 truncate block">{it.nomeOriginal}</span>
+            {it.dividiu ? (
+              <span className="font-mono">
+                {formatBRL(it.precoOriginal)} ÷ {it.pesoVal} {it.pesoU} = <strong>{formatBRL(it.precoNorm)}/{grupo.produtoUnidade}</strong>
+              </span>
+            ) : it.incerto ? (
+              <span className="text-yellow-700">
+                {formatBRL(it.precoOriginal)} <span className="text-yellow-600">⚠ sem peso no nome — verifique</span>
+              </span>
+            ) : (
+              <span className="font-mono">
+                <strong>{formatBRL(it.precoNorm)}/{grupo.produtoUnidade}</strong> (direto)
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Preço médio editável */}
+      <div className="flex items-center gap-2 pl-7 pt-1 border-t border-black/10">
+        <label className="text-sm text-gray-600 shrink-0">
+          {grupo.itens.length > 1 ? 'Média:' : 'Preço:'}
+        </label>
+        <span className="text-xs text-gray-400 shrink-0">R$</span>
+        <input
+          type="number" min="0" step="0.01" inputMode="decimal"
+          value={grupo.preco}
+          onChange={e => onEditarPreco(e.target.value)}
+          className="input w-28 text-base font-semibold text-right"
+        />
+        <span className="text-sm text-gray-400 shrink-0">/ {grupo.produtoUnidade}</span>
+      </div>
+
+      {/* Ações */}
+      <div className="flex gap-2 pt-1">
+        <button onClick={onPular} className="btn-secondary flex-1 text-sm">Pular</button>
+        <button
+          onClick={onConfirmar}
+          className={`flex-1 text-sm font-semibold px-4 py-2 rounded-lg transition-colors ${
+            confirmado ? 'bg-green-600 text-white' : 'bg-red-800 hover:bg-red-900 text-white'
+          }`}
+        >
+          {confirmado ? '✓ Confirmado' : 'Confirmar'}
+        </button>
+      </div>
     </div>
   )
 }

@@ -237,3 +237,18 @@ export function matchearComProdutos(itensLidos, produtos) {
 export function novoGrupoSemMatch(item) {
   return grupoSemMatch(item)
 }
+
+// Dado um nome, devolve o melhor produto do app e a confiança do vínculo.
+// Usado por outros módulos (ex: precos.js) que precisam do matching sem a
+// lógica de agrupamento por contagem.
+export function encontrarMelhorMatch(nome, produtos) {
+  const prep = produtos.map(p => ({ p, tokens: tokens(p.nome) }))
+  const itTokens = tokens(nome)
+  let melhor = null
+  let melhorScore = 0
+  for (const cand of prep) {
+    const sc = pontuar(cand.tokens, itTokens)
+    if (sc > melhorScore) { melhorScore = sc; melhor = cand.p }
+  }
+  return { produto: melhor, confianca: classificar(melhorScore) }
+}
