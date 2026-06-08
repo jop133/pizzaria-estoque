@@ -9,16 +9,18 @@
 // no nome da foto (marca, embalagem) não atrapalha — só prejudica quando uma
 // palavra do produto NÃO aparece no item.
 
-import { fatorUnidade } from './unidades'
+import { fatorUnidade, extrairPeso, removerPeso } from './unidades'
 
 const PESO = new Set(['kg', 'g', 'l', 'ml'])
 
 // Palavras de embalagem/ligação que não devem "ancorar" um vínculo sozinhas.
 // Mantemos números (ex: "1", "3,5") para distinguir "Catchup 1KG" de "Catchup 3,5KG".
+// "com"/"sem" NÃO entram aqui de propósito: distinguem "com gás" de "sem gás",
+// "com sal" de "sem sal", etc.
 const STOP = new Set([
   'pacote', 'pct', 'balde', 'bisnaga', 'pote', 'unidade', 'un', 'und', 'uni',
   'lata', 'caixa', 'cx', 'garrafa', 'sache', 'vidro', 'saco', 'fardo', 'bandeja',
-  'dz', 'duzia', 'kg', 'g', 'ml', 'l', 'de', 'do', 'da', 'com', 'sem', 'e',
+  'dz', 'duzia', 'kg', 'g', 'ml', 'l', 'de', 'do', 'da', 'e',
 ])
 
 const round3 = v => Math.round((v || 0) * 1000) / 1000
@@ -104,10 +106,10 @@ function construirItem(raw) {
   let unidadeEmbalagem = (raw.unidadeEmbalagem || '').toLowerCase()
   const temExplicito = String(pesoEmbalagem).trim() !== '' && PESO.has(unidadeEmbalagem)
   if (!temExplicito) {
-    const m = (raw.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
-    if (m) {
-      pesoEmbalagem = parseFloat(m[1].replace(',', '.'))
-      unidadeEmbalagem = m[2].toLowerCase()
+    const p = extrairPeso(raw.nome)
+    if (p) {
+      pesoEmbalagem = p.valor
+      unidadeEmbalagem = p.unidade
     }
   }
   return {
@@ -236,4 +238,43 @@ export function matchearComProdutos(itensLidos, produtos) {
 // item de um grupo na tela de confirmação).
 export function novoGrupoSemMatch(item) {
   return grupoSemMatch(item)
+}
+
+// Dado um nome, devolve o melhor produto do app e a confiança do vínculo.
+// Usado por outros módulos (ex: precos.js) que precisam do matching sem a
+// lógica de agrupamento por contagem.
+export function encontrarMelhorMatch(nome, produtos) {
+  const prep = produtos.map(p => ({ p, tokens: tokens(p.nome) }))
+  const itTokens = tokens(nome)
+  let melhor = null
+  let melhorScore = 0
+  for (const cand of prep) {
+    const sc = pontuar(cand.tokens, itTokens)
+    if (sc > melhorScore) { melhorScore = sc; melhor = cand.p }
+  }
+  return { produto: melhor, confianca: classificar(melhorScore) }
+}
+
+// Chave para agrupar itens SEM vínculo entre si (ex: "LINGUIÇA SUÍNA 5KG" e
+// "LINGUIÇA SUÍNA 1KG" → mesma chave "linguica suina"). Remove marca/peso/
+// embalagem (STOP) e números, deixando só as palavras significativas.
+// removerPeso já tira os pesos; o que sobra de número (ex: "70%" → "70",
+// percentual de cacau) é diferenciador significativo e deve ser mantido.
+export function chaveAgrupamento(nome) {
+  const sig = tokens(removerPeso(nome)).filter(t => !STOP.has(t))
+  return sig.join(' ')
+}
+
+// Sugere um nome "limpo" de produto a partir do nome bruto do xlsx: remove
+// peso/volume e palavras de embalagem, tira pontuação e aplica Title Case
+// (preservando acentos). Resultado é editável pelo usuário.
+export function sugerirNomeProduto(nome) {
+  const s = removerPeso(nome)
+    .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|unid|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
+    .replace(/[^A-Za-zÀ-ÿ0-9%\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return s.split(' ').filter(Boolean)
+    .map(w => w.length > 2 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase())
+    .join(' ')
 }
