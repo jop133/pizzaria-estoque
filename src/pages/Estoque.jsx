@@ -33,8 +33,10 @@ export function Estoque() {
   // --- Fluxo de importação de preços via xlsx ---
   const [precoFase, setPrecoFase] = useState('idle') // idle | lendo | confirmando | aplicando
   const [gruposPreco, setGruposPreco] = useState([])
-  const [pickerPreco, setPickerPreco] = useState(null) // { grupoId }
+  const [pickerPreco, setPickerPreco] = useState(null) // { grupoId } — vincular a produto existente
   const [buscaPicker, setBuscaPicker] = useState('')
+  const [pickerGrupo, setPickerGrupo] = useState(null) // { grupoId } — juntar com outro da lista
+  const [buscaGrupo, setBuscaGrupo] = useState('')
 
   const filtrados = produtos.filter(p => {
     const okBusca = p.nome.toLowerCase().includes(busca.toLowerCase())
@@ -251,6 +253,26 @@ export function Estoque() {
     })
   }
 
+  // Junta um grupo (origem) em outro da lista (destino): mescla os itens e
+  // recalcula a média na unidade do destino. A origem é removida.
+  function mesclarGruposPreco(origemId, destinoId) {
+    if (origemId === destinoId) { setPickerGrupo(null); setBuscaGrupo(''); return }
+    setGruposPreco(prev => {
+      const origem = prev.find(g => g.id === origemId)
+      const destino = prev.find(g => g.id === destinoId)
+      if (!origem || !destino) return prev
+      const unidadeAlvo = destino.tipo === 'match' ? destino.produtoUnidade : destino.unidadeNova
+      const { itens, media } = recalcularPrecos([...destino.itens, ...origem.itens], unidadeAlvo)
+      return prev
+        .filter(g => g.id !== origemId)
+        .map(g => g.id === destinoId
+          ? { ...g, itens, precoCalculado: media, preco: g.precoEditado ? g.preco : String(media), confirmado: false }
+          : g)
+    })
+    setPickerGrupo(null)
+    setBuscaGrupo('')
+  }
+
   // Handlers de card 'produto novo'
   function editarNomeNovo(id, valor) { patchGrupoPreco(id, { nomeNovo: valor }) }
   function editarCategoriaNova(id, valor) { patchGrupoPreco(id, { categoriaNova: valor }) }
@@ -267,6 +289,8 @@ export function Estoque() {
     setPrecoFase('idle')
     setPickerPreco(null)
     setBuscaPicker('')
+    setPickerGrupo(null)
+    setBuscaGrupo('')
   }
 
   async function aplicarPrecos() {
@@ -393,6 +417,9 @@ export function Estoque() {
                 onEditarPreco={v => editarPrecoGrupo(g.id, v)}
                 onRemoverItem={itemId => removerItemPreco(g.id, itemId)}
                 onVincular={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
+                onVincularLista={gruposVisiveis.length > 1
+                  ? () => { setBuscaGrupo(''); setPickerGrupo({ grupoId: g.id }) }
+                  : null}
                 onConfirmar={() => confirmarGrupoPreco(g.id)}
                 onIgnorar={() => ignorarGrupoPreco(g.id)}
               />
@@ -449,6 +476,52 @@ export function Estoque() {
             </div>
           </Modal>
         )}
+
+        {/* Seletor para juntar com outro grupo da lista */}
+        {pickerGrupo && (() => {
+          const candidatos = gruposVisiveis
+            .filter(g => g.id !== pickerGrupo.grupoId)
+            .map(g => ({
+              id: g.id,
+              nome: g.tipo === 'match' ? g.produtoNome : g.nomeNovo,
+              unidade: g.tipo === 'match' ? g.produtoUnidade : g.unidadeNova,
+              tag: g.tipo === 'match' ? 'já no estoque' : 'novo',
+            }))
+            .filter(c => !buscaGrupo || c.nome.toLowerCase().includes(buscaGrupo.toLowerCase()))
+          return (
+            <Modal title="Juntar com outro item da lista" onClose={() => { setPickerGrupo(null); setBuscaGrupo('') }}>
+              <div className="space-y-3">
+                <p className="text-xs text-gray-500">
+                  Os itens deste produto serão movidos para o item escolhido, e o preço recalculado.
+                </p>
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    autoFocus
+                    placeholder="Buscar na lista..."
+                    value={buscaGrupo}
+                    onChange={e => setBuscaGrupo(e.target.value)}
+                    className="input pl-9"
+                  />
+                </div>
+                <div className="max-h-80 overflow-y-auto divide-y divide-gray-100">
+                  {candidatos.length === 0 ? (
+                    <p className="text-sm text-gray-400 py-6 text-center">Nenhum item na lista.</p>
+                  ) : candidatos.map(c => (
+                    <button
+                      key={c.id}
+                      onClick={() => mesclarGruposPreco(pickerGrupo.grupoId, c.id)}
+                      className="w-full text-left py-3 px-1 hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
+                    >
+                      <span className="text-sm font-medium text-gray-800 truncate">{c.nome}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{c.tag} · {c.unidade}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </Modal>
+          )
+        })()}
       </div>
     )
   }
@@ -729,7 +802,7 @@ function ItensPrecoBreakdown({ itens, unidade, onRemover }) {
 function NovoProdutoCard({
   grupo, categorias, unidades,
   onEditarNome, onEditarUnidade, onEditarCategoria, onEditarPreco, onRemoverItem,
-  onVincular, onConfirmar, onIgnorar,
+  onVincular, onVincularLista, onConfirmar, onIgnorar,
 }) {
   const confirmado = grupo.confirmado
   const cor = confirmado ? 'border-green-300 bg-green-50' : 'border-blue-200 bg-blue-50/40'
@@ -749,9 +822,16 @@ function NovoProdutoCard({
             className="input text-sm font-medium"
             placeholder="Nome do produto"
           />
-          <button onClick={onVincular} className="text-xs text-red-700 underline flex items-center gap-1 mt-1">
-            <ArrowLeftRight className="w-3 h-3" /> vincular a produto existente
-          </button>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1">
+            <button onClick={onVincular} className="text-xs text-red-700 underline flex items-center gap-1">
+              <ArrowLeftRight className="w-3 h-3" /> vincular a produto existente
+            </button>
+            {onVincularLista && (
+              <button onClick={onVincularLista} className="text-xs text-blue-700 underline flex items-center gap-1">
+                <ArrowLeftRight className="w-3 h-3" /> juntar com outro da lista
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
