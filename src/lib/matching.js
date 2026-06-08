@@ -252,3 +252,26 @@ export function encontrarMelhorMatch(nome, produtos) {
   }
   return { produto: melhor, confianca: classificar(melhorScore) }
 }
+
+// Chave para agrupar itens SEM vínculo entre si (ex: "LINGUIÇA SUÍNA 5KG" e
+// "LINGUIÇA SUÍNA 1KG" → mesma chave "linguica suina"). Remove marca/peso/
+// embalagem (STOP) e números, deixando só as palavras significativas.
+export function chaveAgrupamento(nome) {
+  const sig = tokens(nome).filter(t => !STOP.has(t) && !/^\d/.test(t))
+  return sig.join(' ')
+}
+
+// Sugere um nome "limpo" de produto a partir do nome bruto do xlsx: remove
+// peso/volume e palavras de embalagem, tira pontuação e aplica Title Case
+// (preservando acentos). Resultado é editável pelo usuário.
+export function sugerirNomeProduto(nome) {
+  const s = String(nome || '')
+    .replace(/\d+(?:[.,]\d+)?\s*(kg|g|ml|l)\b/gi, ' ')
+    .replace(/\b(pacote|pct|balde|bisnaga|pote|unidade|un|und|uni|lata|caixa|cx|garrafa|sache|vidro|saco|fardo|bandeja|dz|duzia|maco|maço)\b/gi, ' ')
+    .replace(/[^A-Za-zÀ-ÿ0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return s.split(' ').filter(Boolean)
+    .map(w => w.length > 2 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w.toLowerCase())
+    .join(' ')
+}

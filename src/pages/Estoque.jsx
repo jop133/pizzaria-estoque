@@ -6,7 +6,7 @@ import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
-import { lerXlsx, matchearPrecos, normalizarPreco } from '../lib/precos'
+import { lerXlsx, matchearPrecos, normalizarPreco, mediaPrecos } from '../lib/precos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import { Search, ArrowLeftRight } from 'lucide-react'
@@ -182,25 +182,39 @@ export function Estoque() {
     ))
   }
 
+  // Recalcula os preços normalizados de um grupo para uma nova unidade alvo.
+  function recalcularPrecos(itens, unidadeAlvo) {
+    const novos = itens.map(it => {
+      const n = normalizarPreco(it.precoOriginal, it.nomeOriginal, it.unidadeOriginal, unidadeAlvo)
+      return { ...it, precoNorm: n.precoNorm, incerto: n.incerto, dividiu: n.dividiu, pesoVal: n.pesoVal, pesoU: n.pesoU }
+    })
+    return { itens: novos, media: mediaPrecos(novos) }
+  }
+
+  // Vincula o grupo a um produto existente (vira card 'match').
   function escolherProdutoPreco(grupoId, produto) {
     setGruposPreco(prev => prev.map(g => {
       if (g.id !== grupoId) return g
-      const itens = g.itens.map(it => {
-        const n = normalizarPreco(it.precoOriginal, it.nomeOriginal, it.unidadeOriginal, produto.unidade)
-        return { ...it, precoNorm: n.precoNorm, incerto: n.incerto, dividiu: n.dividiu, pesoVal: n.pesoVal, pesoU: n.pesoU }
-      })
-      const validos = itens.filter(it => !it.incerto)
-      const base = validos.length > 0 ? validos : itens
-      const media = Math.round(base.reduce((s, it) => s + it.precoNorm, 0) / base.length * 1000) / 1000
+      const { itens, media } = recalcularPrecos(g.itens, produto.unidade)
       return {
-        ...g, itens,
+        ...g, tipo: 'match', itens,
         produtoId: produto.id, produtoNome: produto.nome, produtoUnidade: produto.unidade,
-        confianca: 'alta', precoCalculado: media,
-        preco: String(media), precoEditado: false,
+        confianca: 'alta', precoCalculado: media, preco: String(media), precoEditado: false,
       }
     }))
     setPickerPreco(null)
     setBuscaPicker('')
+  }
+
+  // Handlers de card 'produto novo'
+  function editarNomeNovo(id, valor) { patchGrupoPreco(id, { nomeNovo: valor }) }
+  function editarCategoriaNova(id, valor) { patchGrupoPreco(id, { categoriaNova: valor }) }
+  function editarUnidadeNova(id, valor) {
+    setGruposPreco(prev => prev.map(g => {
+      if (g.id !== id) return g
+      const { itens, media } = recalcularPrecos(g.itens, valor)
+      return { ...g, unidadeNova: valor, itens, precoCalculado: media, preco: g.precoEditado ? g.preco : String(media) }
+    }))
   }
 
   function fecharPrecos() {
@@ -211,26 +225,53 @@ export function Estoque() {
   }
 
   async function aplicarPrecos() {
-    const aplicaveis = gruposPreco.filter(g => g.confirmado && g.produtoId)
-    if (aplicaveis.length === 0) return toast.error('Confirme ao menos um produto antes de aplicar.')
+    const atualizar = gruposPreco.filter(g => g.confirmado && g.tipo === 'match' && g.produtoId)
+    const cadastrar = gruposPreco.filter(g => g.confirmado && g.tipo === 'novo')
+    if (atualizar.length === 0 && cadastrar.length === 0) {
+      return toast.error('Confirme ao menos um produto antes de aplicar.')
+    }
     setPrecoFase('aplicando')
-    let ok = 0, erros = 0
-    for (const g of aplicaveis) {
+    let ok = 0, criados = 0, erros = 0
+
+    // Atualiza preços de produtos existentes
+    for (const g of atualizar) {
       const v = parseFloat(String(g.preco).replace(',', '.'))
       if (isNaN(v) || v < 0) { erros++; continue }
       const { error } = await supabase.from('produtos').update({ preco: v }).eq('id', g.produtoId)
-      if (error) erros++
-      else ok++
+      if (error) erros++; else ok++
     }
+
+    // Cadastra produtos novos
+    for (const g of cadastrar) {
+      const nome = String(g.nomeNovo || '').trim()
+      const v = parseFloat(String(g.preco).replace(',', '.'))
+      if (!nome || isNaN(v) || v < 0) { erros++; continue }
+      const { data: novo, error } = await supabase.from('produtos').insert({
+        organizacao_id: session.organizacaoId,
+        nome,
+        categoria: g.categoriaNova || 'Outros',
+        unidade: g.unidadeNova || 'un',
+        quantidade: 0,
+        estoque_minimo: 0,
+        preco: v,
+      }).select().single()
+      if (error) { erros++; continue }
+      await registrarEvento('produto_novo', { produtoId: novo?.id, nome })
+      criados++
+    }
+
     if (ok > 0) toast.success(`${ok} preço(s) atualizado(s)!`)
-    if (erros > 0) toast.error(`${erros} produto(s) não puderam ser atualizados.`)
+    if (criados > 0) toast.success(`${criados} produto(s) cadastrado(s)!`)
+    if (erros > 0) toast.error(`${erros} item(ns) não puderam ser processados.`)
     fecharPrecos()
   }
 
   const gruposVisiveis    = gruposPreco.filter(g => !g.pulado)
-  const gruposComProduto  = gruposVisiveis.filter(g => g.produtoId)
-  const gruposSemMatch    = gruposVisiveis.filter(g => !g.produtoId)
-  const confirmadosPreco  = gruposComProduto.filter(g => g.confirmado)
+  const gruposComProduto  = gruposVisiveis.filter(g => g.tipo === 'match')
+  const gruposNovos       = gruposVisiveis.filter(g => g.tipo === 'novo')
+  const confirmadosMatch  = gruposComProduto.filter(g => g.confirmado)
+  const confirmadosNovos  = gruposNovos.filter(g => g.confirmado)
+  const totalConfirmados  = confirmadosMatch.length + confirmadosNovos.length
   const altosPreco        = gruposComProduto.filter(g => g.confianca === 'alta' && !g.confirmado)
   const produtosPicker    = produtos.filter(p =>
     !buscaPicker || p.nome.toLowerCase().includes(buscaPicker.toLowerCase())
@@ -250,18 +291,19 @@ export function Estoque() {
         {/* Resumo + ações em massa */}
         <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
           <p className="text-sm text-gray-600">
-            <strong>{gruposComProduto.length}</strong> produto(s) identificado(s).
-            Confira cada preço e toque em <strong>Confirmar</strong>.
+            <strong>{gruposComProduto.length}</strong> com preço a atualizar
+            {gruposNovos.length > 0 && <> · <strong>{gruposNovos.length}</strong> para cadastrar</>}.
+            Confira cada um e toque em <strong>Confirmar</strong>.
           </p>
           <div className="flex flex-wrap gap-2 text-xs">
-            <span className="bg-green-50 text-green-700 px-2 py-1 rounded-full">✓ {confirmadosPreco.length} confirmados</span>
+            <span className="bg-green-50 text-green-700 px-2 py-1 rounded-full">✓ {totalConfirmados} confirmados</span>
             {gruposComProduto.filter(g => g.confianca === 'media' && !g.confirmado).length > 0 && (
               <span className="bg-yellow-50 text-yellow-700 px-2 py-1 rounded-full">
                 ? {gruposComProduto.filter(g => g.confianca === 'media' && !g.confirmado).length} revisar
               </span>
             )}
-            {gruposSemMatch.length > 0 && (
-              <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full">✕ {gruposSemMatch.length} sem produto</span>
+            {gruposNovos.length > 0 && (
+              <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded-full">+ {gruposNovos.length} novos</span>
             )}
           </div>
           {altosPreco.length > 0 && (
@@ -271,7 +313,7 @@ export function Estoque() {
           )}
         </div>
 
-        {/* Cards de produto */}
+        {/* Cards de produto existente (atualizar preço) */}
         {gruposComProduto.map(g => (
           <PrecoCard
             key={g.id}
@@ -283,26 +325,29 @@ export function Estoque() {
           />
         ))}
 
-        {/* Sem match */}
-        {gruposSemMatch.length > 0 && (
-          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
-            <p className="text-sm font-semibold text-gray-500">✕ Sem produto no estoque</p>
-            {gruposSemMatch.map(g => (
-              <div key={g.id} className="bg-white border border-gray-200 rounded-lg p-3">
-                <p className="text-sm font-medium text-gray-800 truncate">{g.itens[0]?.nomeOriginal}</p>
-                <p className="text-xs text-gray-500 mb-2">{formatBRL(g.itens[0]?.precoOriginal)}</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
-                    className="btn-secondary text-xs flex-1"
-                  >
-                    Vincular a produto
-                  </button>
-                  <button onClick={() => ignorarGrupoPreco(g.id)} className="btn-secondary text-xs flex-1">
-                    Ignorar
-                  </button>
-                </div>
-              </div>
+        {/* Produtos novos (cadastrar) */}
+        {gruposNovos.length > 0 && (
+          <div className="space-y-3">
+            <p className="text-sm font-semibold text-blue-700 flex items-center gap-2 pt-2">
+              <span className="text-lg">+</span> Cadastrar produtos novos ({gruposNovos.length})
+            </p>
+            <p className="text-xs text-gray-500 -mt-1">
+              Não foram encontrados no estoque. Confira nome, unidade e categoria antes de cadastrar.
+            </p>
+            {gruposNovos.map(g => (
+              <NovoProdutoCard
+                key={g.id}
+                grupo={g}
+                categorias={CATEGORIAS}
+                unidades={UNIDADES}
+                onEditarNome={v => editarNomeNovo(g.id, v)}
+                onEditarUnidade={v => editarUnidadeNova(g.id, v)}
+                onEditarCategoria={v => editarCategoriaNova(g.id, v)}
+                onEditarPreco={v => editarPrecoGrupo(g.id, v)}
+                onVincular={() => { setBuscaPicker(''); setPickerPreco({ grupoId: g.id }) }}
+                onConfirmar={() => confirmarGrupoPreco(g.id)}
+                onIgnorar={() => ignorarGrupoPreco(g.id)}
+              />
             ))}
           </div>
         )}
@@ -312,12 +357,15 @@ export function Estoque() {
           <div className="max-w-lg mx-auto">
             <button
               onClick={aplicarPrecos}
-              disabled={precoFase === 'aplicando' || confirmadosPreco.length === 0}
+              disabled={precoFase === 'aplicando' || totalConfirmados === 0}
               className="btn-primary w-full text-base py-3 disabled:opacity-50 shadow-lg"
             >
-              {precoFase === 'aplicando'
-                ? 'Salvando...'
-                : `Salvar ${confirmadosPreco.length} preço(s) no estoque`}
+              {precoFase === 'aplicando' ? 'Salvando...' : (() => {
+                const partes = []
+                if (confirmadosMatch.length) partes.push(`${confirmadosMatch.length} preço(s)`)
+                if (confirmadosNovos.length) partes.push(`${confirmadosNovos.length} novo(s)`)
+                return partes.length ? `Salvar ${partes.join(' + ')}` : 'Confirme ao menos um item'
+              })()}
             </button>
           </div>
         </div>
@@ -552,26 +600,7 @@ function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
       </div>
 
       {/* Itens lidos da planilha com cálculo de normalização */}
-      <div className="space-y-1 pl-7">
-        {grupo.itens.map(it => (
-          <div key={it.id} className="text-xs text-gray-600 leading-relaxed">
-            <span className="text-gray-500 truncate block">{it.nomeOriginal}</span>
-            {it.dividiu ? (
-              <span className="font-mono">
-                {formatBRL(it.precoOriginal)} ÷ {it.pesoVal} {it.pesoU} = <strong>{formatBRL(it.precoNorm)}/{grupo.produtoUnidade}</strong>
-              </span>
-            ) : it.incerto ? (
-              <span className="text-yellow-700">
-                {formatBRL(it.precoOriginal)} <span className="text-yellow-600">⚠ sem peso no nome — verifique</span>
-              </span>
-            ) : (
-              <span className="font-mono">
-                <strong>{formatBRL(it.precoNorm)}/{grupo.produtoUnidade}</strong> (direto)
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
+      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.produtoUnidade} />
 
       {/* Preço médio editável */}
       <div className="flex items-center gap-2 pl-7 pt-1 border-t border-black/10">
@@ -598,6 +627,112 @@ function PrecoCard({ grupo, onTrocar, onEditarPreco, onConfirmar, onPular }) {
           }`}
         >
           {confirmado ? '✓ Confirmado' : 'Confirmar'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// Detalhamento dos itens lidos da planilha com o cálculo de normalização do preço.
+function ItensPrecoBreakdown({ itens, unidade }) {
+  return (
+    <div className="space-y-1 pl-7">
+      {itens.map(it => (
+        <div key={it.id} className="text-xs text-gray-600 leading-relaxed">
+          <span className="text-gray-500 truncate block">{it.nomeOriginal}</span>
+          {it.dividiu ? (
+            <span className="font-mono">
+              {formatBRL(it.precoOriginal)} ÷ {it.pesoVal} {it.pesoU} = <strong>{formatBRL(it.precoNorm)}/{unidade}</strong>
+            </span>
+          ) : it.incerto ? (
+            <span className="text-yellow-700">
+              {formatBRL(it.precoOriginal)} <span className="text-yellow-600">⚠ sem peso no nome — verifique</span>
+            </span>
+          ) : (
+            <span className="font-mono">
+              <strong>{formatBRL(it.precoNorm)}/{unidade}</strong> (direto)
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// Card de PRODUTO NOVO (sem vínculo no estoque) — cadastrar.
+function NovoProdutoCard({
+  grupo, categorias, unidades,
+  onEditarNome, onEditarUnidade, onEditarCategoria, onEditarPreco,
+  onVincular, onConfirmar, onIgnorar,
+}) {
+  const confirmado = grupo.confirmado
+  const cor = confirmado ? 'border-green-300 bg-green-50' : 'border-blue-200 bg-blue-50/40'
+
+  return (
+    <div className={`border rounded-xl p-4 space-y-3 ${cor}`}>
+      {/* Cabeçalho */}
+      <div className="flex items-start gap-2">
+        <span className={`text-lg font-bold ${confirmado ? 'text-green-600' : 'text-blue-500'}`}>
+          {confirmado ? '✓' : '+'}
+        </span>
+        <div className="flex-1 min-w-0">
+          <label className="label">Nome do produto</label>
+          <input
+            value={grupo.nomeNovo}
+            onChange={e => onEditarNome(e.target.value)}
+            className="input text-sm font-medium"
+            placeholder="Nome do produto"
+          />
+          <button onClick={onVincular} className="text-xs text-red-700 underline flex items-center gap-1 mt-1">
+            <ArrowLeftRight className="w-3 h-3" /> vincular a produto existente
+          </button>
+        </div>
+      </div>
+
+      {/* Unidade + Categoria */}
+      <div className="grid grid-cols-2 gap-2 pl-7">
+        <div>
+          <label className="label">Unidade</label>
+          <select value={grupo.unidadeNova} onChange={e => onEditarUnidade(e.target.value)} className="input text-sm">
+            {unidades.map(u => <option key={u}>{u}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="label">Categoria</label>
+          <select value={grupo.categoriaNova} onChange={e => onEditarCategoria(e.target.value)} className="input text-sm">
+            {categorias.map(c => <option key={c}>{c}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Itens lidos + cálculo */}
+      <ItensPrecoBreakdown itens={grupo.itens} unidade={grupo.unidadeNova} />
+
+      {/* Preço editável */}
+      <div className="flex items-center gap-2 pl-7 pt-1 border-t border-black/10">
+        <label className="text-sm text-gray-600 shrink-0">
+          {grupo.itens.length > 1 ? 'Média:' : 'Preço:'}
+        </label>
+        <span className="text-xs text-gray-400 shrink-0">R$</span>
+        <input
+          type="number" min="0" step="0.01" inputMode="decimal"
+          value={grupo.preco}
+          onChange={e => onEditarPreco(e.target.value)}
+          className="input w-28 text-base font-semibold text-right"
+        />
+        <span className="text-sm text-gray-400 shrink-0">/ {grupo.unidadeNova}</span>
+      </div>
+
+      {/* Ações */}
+      <div className="flex gap-2 pt-1">
+        <button onClick={onIgnorar} className="btn-secondary flex-1 text-sm">Ignorar</button>
+        <button
+          onClick={onConfirmar}
+          className={`flex-1 text-sm font-semibold px-4 py-2 rounded-lg transition-colors ${
+            confirmado ? 'bg-green-600 text-white' : 'bg-red-800 hover:bg-red-900 text-white'
+          }`}
+        >
+          {confirmado ? '✓ Vai cadastrar' : '+ Cadastrar'}
         </button>
       </div>
     </div>
