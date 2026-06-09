@@ -362,11 +362,13 @@ export function Estoque() {
       const itens = produtos.map(p => {
         const atual = p.categoria || 'Outros'
         let nova
-        // Produtos gerados por fichas de produção (categoria antiga "Produção"
-        // ou já "Produções Internas") vão SEMPRE para "Produções Internas",
-        // sem depender do palpite da IA pelo nome.
+        // Regras fixas (não dependem do palpite da IA pelo nome):
+        // - "Produção" (antiga) / "Produções Internas" → Produções Internas.
+        // - "Vegetal" (antiga) → Hortifruti.
         if (atual === 'Produção' || atual === 'Produções Internas') {
           nova = 'Produções Internas'
+        } else if (atual === 'Vegetal') {
+          nova = 'Hortifruti'
         } else {
           const sug = mapa[p.nome.trim()]
           nova = (sug && CATEGORIAS.includes(sug)) ? sug : atual

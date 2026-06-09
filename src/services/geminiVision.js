@@ -353,7 +353,17 @@ export async function categorizarProdutos(nomes, categorias, apiKey, onProgresso
     const prompt = `Classifique cada produto de estoque de uma pizzaria em UMA destas categorias EXATAS (copie igual, com acentos):
 ${categorias.join(' | ')}
 
-Guia rapido: Laticinios e Frios = queijo, catupiry, creme de leite, manteiga, leite, frios; Proteinas = carne, frango, linguica, bacon, peixe, ovo; Hortifruti = frutas, legumes, verduras frescas; Mercearia = farinha, acucar, oleo, azeite, molho, massa seca, tempero, enlatado, mel; Producoes Internas = feito na cozinha (massa/molho caseiro, recheio); Bebidas = refrigerante, suco, agua, cerveja, vinho; Embalagens e Etiquetas = saco, bandeja, pote, papel, filme, etiqueta, descartavel; Limpeza = detergente, sabao, alcool, desinfetante, esponja; Porcionados = itens porcionados; Outros = o resto.
+Entenda o SIGNIFICADO (nao so a palavra). Guia:
+- Hortifruti: SO produtos frescos/in natura (frutas, legumes, verduras, ervas frescas). Ex: "Batata Branca Lavada", "Tomate", "Alface", "Cebola".
+- Mercearia: secos, enlatados, congelados e INDUSTRIALIZADOS embalados. ATENCAO: batata ja processada vai aqui — "Batata Palito", "Batata Palha" sao industrializadas = Mercearia, NAO Hortifruti. Tambem: farinha, acucar, oleo, azeite, molho de tomate, massa seca, tempero, conserva, mel, enlatado.
+- Laticinios e Frios: queijo, mussarela, catupiry, requeijao, creme de leite, manteiga, leite, iogurte, frios fatiados (presunto, mortadela).
+- Proteinas: carnes, frango, linguica, bacon, peixe, camarao, ovos, hamburguer.
+- Producoes Internas: feito na propria cozinha (massa/molho caseiro, recheio, base).
+- Bebidas: refrigerante, suco, agua, cerveja, vinho, energetico, destilado.
+- Limpeza: PRODUTOS QUIMICOS de limpeza/higiene — detergente, sabao, agua sanitaria, alcool, desinfetante, multiuso, amaciante, esponja, pano de limpeza, saco de lixo.
+- Embalagens e Etiquetas: itens DESCARTAVEIS de embalar/servir (nao quimicos) — saco plastico, bandeja, pote, copo, talher descartavel, papel toalha, guardanapo, filme plastico, papel aluminio, etiqueta, fita, marmita.
+- Porcionados: produtos ja porcionados em porcoes individuais (nome com "porcionado"/"porcao").
+- Outros: so quando realmente nao se encaixa.
 
 Produtos (responda na MESMA ORDEM, exatamente ${lote.length} itens):
 ${lote.map((n, i) => `${i + 1}. ${n}`).join('\n')}
