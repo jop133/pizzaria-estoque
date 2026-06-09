@@ -9,6 +9,8 @@ import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
+import { SeletorProduto } from '../components/SeletorProduto'
+import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
@@ -30,6 +32,7 @@ export function FichasTecnicas() {
   const [fotoAnalise, setFotoAnalise] = useState(null)
   const [analisando, setAnalisando] = useState(false)
   const [resultadoFoto, setResultadoFoto] = useState(null)
+  const [pickerIng, setPickerIng] = useState(null) // índice do insumo c/ seletor aberto
   const fileRefFoto = useRef()
   const cameraRefFoto = useRef()
 
@@ -58,6 +61,15 @@ export function FichasTecnicas() {
     setResultadoFoto(null)
   }
 
+  // Acha o produto do estoque que melhor casa com um nome (exato, depois parcial).
+  function acharProdutoPorNome(nome) {
+    const b = (nome || '').trim().toLowerCase()
+    if (!b) return null
+    let prod = produtos.find(p => p.nome.toLowerCase() === b)
+    if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(b) || b.includes(p.nome.toLowerCase()))
+    return prod || null
+  }
+
   async function processarFoto() {
     if (!fotoAnalise) return
     if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
@@ -65,7 +77,17 @@ export function FichasTecnicas() {
     try {
       const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
       const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey, ehProducao ? 'producao' : 'prato')
-      setResultadoFoto(res)
+      // Enriquece cada insumo: vínculo sugerido (produtoId) + defaults editáveis.
+      const ingredientes = (res.ingredientes || []).map(ing => {
+        const prod = acharProdutoPorNome(ing.nomeCadastrado || ing.nome)
+        return {
+          nome: ing.nome || '',
+          quantidade: ing.quantidade ?? '',
+          unidade: ing.unidade || 'un',
+          produtoId: prod?.id ?? null,
+        }
+      })
+      setResultadoFoto({ ...res, ingredientes })
     } catch (e) {
       toast.error(e.message || 'Erro ao analisar imagem')
     } finally {
@@ -73,15 +95,50 @@ export function FichasTecnicas() {
     }
   }
 
+  // Edição do resultado da IA antes de salvar
+  function editarResultado(patch) { setResultadoFoto(r => ({ ...r, ...patch })) }
+  function editarIngrediente(i, patch) {
+    setResultadoFoto(r => ({ ...r, ingredientes: r.ingredientes.map((ing, idx) => idx === i ? { ...ing, ...patch } : ing) }))
+  }
+  function removerIngrediente(i) {
+    setResultadoFoto(r => ({ ...r, ingredientes: r.ingredientes.filter((_, idx) => idx !== i) }))
+  }
+  function adicionarIngrediente() {
+    setResultadoFoto(r => ({ ...r, ingredientes: [...(r.ingredientes || []), { nome: '', quantidade: '', unidade: 'un', produtoId: null }] }))
+  }
+
+  // Resolve o produto de um insumo da ficha: usa o vínculo escolhido (produtoId)
+  // ou cria um produto novo a partir do nome editado. Retorna { produtoId, unidadeDestino }.
+  async function resolverInsumo(ing, orgId) {
+    let produtoId = ing.produtoId
+    let unidadeDestino
+    if (produtoId) {
+      unidadeDestino = produtos.find(p => p.id === produtoId)?.unidade || ing.unidade || 'un'
+    } else {
+      const nome = (ing.nome || '').trim()
+      if (!nome) return null
+      const { data: novo } = await supabase
+        .from('produtos')
+        .insert({ organizacao_id: orgId, nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
+        .select().single()
+      produtoId = novo?.id
+      unidadeDestino = ing.unidade || 'un'
+      if (produtoId) await registrarEvento('produto_novo', { produtoId, nome })
+    }
+    return { produtoId, unidadeDestino }
+  }
+
   async function salvarFichaFoto() {
     if (!resultadoFoto) return
+    const nome = (resultadoFoto.nome || '').trim()
+    if (!nome) return toast.error('Informe o nome do prato')
     const orgId = session.organizacaoId
 
     const { data: ficha, error } = await supabase
       .from('fichas_tecnicas')
       .insert({
         organizacao_id: orgId,
-        nome: resultadoFoto.nome,
+        nome,
         categoria: resultadoFoto.categoria || 'Pizza',
         descricao: resultadoFoto.descricao || '',
         tipo_ficha: 'prato',
@@ -91,29 +148,13 @@ export function FichasTecnicas() {
     if (error) return toast.error(error.message)
 
     for (const ing of resultadoFoto.ingredientes) {
-      const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
-      let prod = produtos.find(p => p.nome.toLowerCase() === busca)
-      if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
-      let produtoId = prod?.id
-      let unidadeDestino = prod?.unidade
-
-      if (!produtoId) {
-        const { data: novo } = await supabase
-          .from('produtos')
-          .insert({ organizacao_id: orgId, nome: ing.nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
-          .select()
-          .single()
-        produtoId = novo?.id
-        unidadeDestino = ing.unidade || 'un'
-        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
-      }
-      if (produtoId) {
-        const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
-        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: qtd })
-      }
+      const r = await resolverInsumo(ing, orgId)
+      if (!r?.produtoId) continue
+      const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, r.unidadeDestino)
+      await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: r.produtoId, quantidade: qtd })
     }
-    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: resultadoFoto.nome })
-    toast.success(`Ficha "${resultadoFoto.nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome })
+    toast.success(`Ficha "${nome}" criada com ${resultadoFoto.ingredientes.length} ingrediente(s)!`)
     setModalFoto(false)
     setFotoAnalise(null)
     setResultadoFoto(null)
@@ -154,24 +195,10 @@ export function FichasTecnicas() {
     if (error) return toast.error(error.message)
 
     for (const ing of resultadoFoto.ingredientes || []) {
-      const busca = (ing.nomeCadastrado || ing.nome || '').toLowerCase()
-      let prod = produtos.find(p => p.nome.toLowerCase() === busca)
-      if (!prod) prod = produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
-      let produtoId = prod?.id
-      let unidadeDestino = prod?.unidade
-      if (!produtoId) {
-        const { data: novo } = await supabase
-          .from('produtos')
-          .insert({ organizacao_id: orgId, nome: ing.nome, categoria: 'Outros', unidade: ing.unidade || 'un', quantidade: 0, estoque_minimo: 0 })
-          .select().single()
-        produtoId = novo?.id
-        unidadeDestino = ing.unidade || 'un'
-        if (produtoId) await registrarEvento('produto_novo', { produtoId, nome: ing.nome })
-      }
-      if (produtoId) {
-        const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, unidadeDestino)
-        await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: produtoId, quantidade: qtd })
-      }
+      const r = await resolverInsumo(ing, orgId)
+      if (!r?.produtoId) continue
+      const qtd = converterParaUnidadeProduto(ing.quantidade, ing.unidade, r.unidadeDestino)
+      await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: r.produtoId, quantidade: qtd })
     }
 
     await registrarEvento('ficha_nova', { fichaId: ficha.id, nome })
@@ -411,7 +438,7 @@ export function FichasTecnicas() {
       )}
 
       {modalFoto && (
-        <Modal title="Importar Ficha por Foto" onClose={() => { setModalFoto(false); setFotoAnalise(null); setResultadoFoto(null) }}>
+        <Modal title="Importar Ficha por Foto" onClose={() => { setModalFoto(false); setFotoAnalise(null); setResultadoFoto(null); setPickerIng(null) }}>
           <div className="space-y-4">
             <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center space-y-3">
               {fotoAnalise ? (
@@ -435,36 +462,114 @@ export function FichasTecnicas() {
 
             {resultadoFoto && (
               <div className="space-y-3">
-                <div className="bg-gray-50 rounded-lg p-3 space-y-2">
-                  <p className="font-semibold text-gray-800">{resultadoFoto.nome}</p>
-                  {ehProducao && (
-                    <p className="text-xs text-gray-600">
-                      Produz em <strong>{UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase()) ? resultadoFoto.unidade.toLowerCase() : 'kg'}</strong>
-                      {' '}· rende <strong>{parseFloat(resultadoFoto.rendimento) > 0 ? resultadoFoto.rendimento : 1}</strong> por lote
-                    </p>
-                  )}
-                  <p className="text-xs text-gray-500">{resultadoFoto.descricao}</p>
-                  {resultadoFoto.observacao && <p className="text-xs text-yellow-700">⚠️ {resultadoFoto.observacao}</p>}
+                <p className="text-xs text-gray-500">Revise e ajuste o que a IA leu antes de criar a ficha.</p>
+
+                {/* Nome do prato / produto gerado */}
+                <div>
+                  <label className="label">{ehProducao ? 'Nome do produto gerado' : 'Nome do prato'}</label>
+                  <input
+                    className="input"
+                    value={resultadoFoto.nome || ''}
+                    onChange={e => editarResultado({ nome: e.target.value })}
+                    placeholder={ehProducao ? 'Ex: Massa de Pizza' : 'Ex: Pizza Margherita'}
+                  />
                 </div>
-                <p className="text-xs font-medium text-gray-500 uppercase">{ehProducao ? 'Insumos identificados' : 'Ingredientes identificados'}</p>
-                <div className="space-y-1 max-h-48 overflow-y-auto">
+
+                {/* Produção: unidade + rendimento */}
+                {ehProducao && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="label">Unidade</label>
+                      <select
+                        className="input"
+                        value={UNIDADES_PRODUCAO.includes((resultadoFoto.unidade || '').toLowerCase()) ? resultadoFoto.unidade.toLowerCase() : 'kg'}
+                        onChange={e => editarResultado({ unidade: e.target.value })}
+                      >
+                        {UNIDADES_PRODUCAO.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="label">Rende por lote</label>
+                      <input
+                        type="number" min="0.001" step="0.001" className="input"
+                        value={resultadoFoto.rendimento ?? ''}
+                        onChange={e => editarResultado({ rendimento: e.target.value })}
+                        placeholder="Ex: 5"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {resultadoFoto.observacao && <p className="text-xs text-yellow-700">⚠️ {resultadoFoto.observacao}</p>}
+
+                {/* Insumos editáveis */}
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-medium text-gray-500 uppercase">{ehProducao ? 'Insumos' : 'Ingredientes'}</p>
+                  <button onClick={adicionarIngrediente} className="text-xs text-red-700 underline">+ adicionar</button>
+                </div>
+                <div className="space-y-2 max-h-72 overflow-y-auto">
                   {resultadoFoto.ingredientes.map((ing, i) => {
-                    const prod = produtos.find(p => p.nome.toLowerCase() === (ing.nomeCadastrado || '').toLowerCase())
+                    const prod = ing.produtoId ? produtos.find(p => p.id === ing.produtoId) : null
                     return (
-                      <div key={i} className="flex items-center justify-between text-sm border border-gray-100 rounded px-3 py-1.5">
-                        <span className="text-gray-700">{ing.nome}</span>
+                      <div key={i} className="border border-gray-200 rounded-lg p-2 space-y-2">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono text-xs">{ing.quantidade} {ing.unidade}</span>
-                          {prod ? <Badge color="green">✓</Badge> : <Badge color="gray">Novo</Badge>}
+                          <input
+                            className="input text-sm flex-1"
+                            value={ing.nome}
+                            onChange={e => editarIngrediente(i, { nome: e.target.value })}
+                            placeholder="Nome do insumo"
+                          />
+                          <button onClick={() => removerIngrediente(i)} className="text-gray-300 hover:text-red-500 shrink-0" aria-label="Remover">
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number" min="0" step="0.001" inputMode="decimal"
+                            className="input text-sm w-24"
+                            value={ing.quantidade}
+                            onChange={e => editarIngrediente(i, { quantidade: e.target.value })}
+                            placeholder="Qtd"
+                          />
+                          <input
+                            className="input text-sm w-20"
+                            value={ing.unidade}
+                            onChange={e => editarIngrediente(i, { unidade: e.target.value })}
+                            placeholder="un"
+                          />
+                          <button
+                            onClick={() => setPickerIng(i)}
+                            className={`text-xs underline ml-auto truncate ${prod ? 'text-green-700' : 'text-gray-500'}`}
+                          >
+                            {prod ? `✓ ${prod.nome}` : 'criar novo'}
+                          </button>
                         </div>
                       </div>
                     )
                   })}
+                  {resultadoFoto.ingredientes.length === 0 && (
+                    <p className="text-sm text-gray-400 text-center py-2">Nenhum insumo. Toque em "+ adicionar".</p>
+                  )}
                 </div>
+
                 <button onClick={ehProducao ? salvarFichaProducaoFoto : salvarFichaFoto} className="btn-primary w-full">
                   ✅ Criar Ficha com {resultadoFoto.ingredientes.length} {ehProducao ? 'insumo(s)' : 'ingrediente(s)'}
                 </button>
               </div>
+            )}
+
+            {/* Seletor de produto para vincular um insumo da IA */}
+            {pickerIng !== null && resultadoFoto && (
+              <SeletorProduto
+                titulo="Vincular insumo a produto"
+                produtos={produtos}
+                onEscolher={p => { editarIngrediente(pickerIng, { produtoId: p.id }); setPickerIng(null) }}
+                onClose={() => setPickerIng(null)}
+                opcaoExtra={{
+                  label: '+ Criar produto novo (usar o nome digitado)',
+                  onEscolher: () => { editarIngrediente(pickerIng, { produtoId: null }); setPickerIng(null) },
+                }}
+              />
             )}
           </div>
         </Modal>
@@ -479,6 +584,8 @@ function DetalheIngredientes({ ficha, custoUnit }) {
   const [form, setForm] = useState({ produtoId: '', quantidade: '' })
   const [lotes, setLotes] = useState('')
   const [produzindo, setProduzindo] = useState(false)
+  const [pickerAberto, setPickerAberto] = useState(false)
+  const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
 
   const ehProducao = ficha.tipo_ficha === 'producao'
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
@@ -553,14 +660,12 @@ function DetalheIngredientes({ ficha, custoUnit }) {
       )}
 
       <div className="flex gap-2 mb-4 flex-wrap">
-        <select
-          className="input flex-1 min-w-40"
-          value={form.produtoId}
-          onChange={e => setForm(f => ({ ...f, produtoId: e.target.value }))}
+        <button
+          onClick={() => setPickerAberto(true)}
+          className={`input flex-1 min-w-40 text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
         >
-          <option value="">Selecionar {ehProducao ? 'insumo' : 'produto'}...</option>
-          {produtos.map(p => <option key={p.id} value={p.id}>{p.nome} ({p.unidade})</option>)}
-        </select>
+          {produtoSel ? `${produtoSel.nome} (${produtoSel.unidade})` : `Selecionar ${ehProducao ? 'insumo' : 'produto'}...`}
+        </button>
         <input
           type="number" min="0.001" step="0.001"
           placeholder="Quantidade"
@@ -570,6 +675,16 @@ function DetalheIngredientes({ ficha, custoUnit }) {
         />
         <button onClick={adicionar} className="btn-primary">Adicionar</button>
       </div>
+
+      {pickerAberto && (
+        <SeletorProduto
+          titulo={`Selecionar ${ehProducao ? 'insumo' : 'produto'}`}
+          produtos={produtos}
+          excluirIds={ingredientes.map(i => i.produto_id)}
+          onEscolher={p => { setForm(f => ({ ...f, produtoId: String(p.id) })); setPickerAberto(false) }}
+          onClose={() => setPickerAberto(false)}
+        />
+      )}
 
       {ingredientes.length === 0 ? (
         <p className="text-gray-400 text-sm">Nenhum {ehProducao ? 'insumo' : 'ingrediente'} cadastrado ainda.</p>
