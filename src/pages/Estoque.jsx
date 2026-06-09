@@ -13,7 +13,7 @@ import { Badge } from '../components/Badge'
 import { Search, ArrowLeftRight, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
+const CATEGORIAS = ['Laticínios e Frios', 'Proteínas', 'Hortifruti', 'Mercearia', 'Produções Internas', 'Bebidas', 'Embalagens e Etiquetas', 'Limpeza', 'Porcionados', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
 const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0, preco: 0 }
 
@@ -683,6 +683,10 @@ export function Estoque() {
               <div>
                 <label className="label">Categoria</label>
                 <select className="input" value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
+                  {/* Preserva a categoria antiga do produto se não estiver na lista nova */}
+                  {form.categoria && !CATEGORIAS.includes(form.categoria) && (
+                    <option value={form.categoria}>{form.categoria} (antiga)</option>
+                  )}
                   {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>

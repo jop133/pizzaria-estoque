@@ -55,9 +55,13 @@ function pesosDistintos(rawItens) {
 
 // Categoria padrão sugerida a partir da aba de origem (editável depois).
 const CATEGORIA_ABA = {
-  'BEBIDAS': 'Bebida',
-  'HORTIFRUTIS': 'Vegetal',
-  'DESCARTÁVEIS E LIMPEZA': 'Embalagem',
+  'BEBIDAS': 'Bebidas',
+  'HORTIFRUTIS': 'Hortifruti',
+  'CÁRNEOS': 'Proteínas',
+  'ALIMENTOS SECOS': 'Mercearia',
+  'ALIMENTOS ÚMIDOS': 'Mercearia',
+  'PORCIONADOS': 'Porcionados',
+  'DESCARTÁVEIS E LIMPEZA': 'Embalagens e Etiquetas',
 }
 const categoriaDaAba = aba => CATEGORIA_ABA[aba] || 'Outros'
 

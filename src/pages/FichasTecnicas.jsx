@@ -14,7 +14,7 @@ import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
-const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml']
+const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml', 'un']
 const VAZIO_PRATO = { nome: '', categoria: 'Pizza', descricao: '', tipo_ficha: 'prato' }
 const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', unidade: 'kg', rendimento: '' }
 
@@ -178,7 +178,7 @@ export function FichasTecnicas() {
     } else {
       const { data: novo, error: e1 } = await supabase
         .from('produtos')
-        .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+        .insert({ organizacao_id: orgId, nome, categoria: 'Produções Internas', unidade, quantidade: 0, estoque_minimo: 0 })
         .select().single()
       if (e1) return toast.error(e1.message)
       prodGeradoId = novo.id
@@ -253,7 +253,7 @@ export function FichasTecnicas() {
         } else {
           const { data: novoProd, error: errProd } = await supabase
             .from('produtos')
-            .insert({ organizacao_id: orgId, nome, categoria: 'Produção', unidade, quantidade: 0, estoque_minimo: 0 })
+            .insert({ organizacao_id: orgId, nome, categoria: 'Produções Internas', unidade, quantidade: 0, estoque_minimo: 0 })
             .select()
             .single()
           if (errProd) return toast.error(errProd.message)
