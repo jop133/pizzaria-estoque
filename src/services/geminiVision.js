@@ -300,63 +300,72 @@ Retorne SOMENTE este JSON:
   }
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+// Chamada de texto ao Groq com 1 retentativa em caso de rate limit (429),
+// respeitando o tempo sugerido pela API ("try again in Xs").
+async function chamarGroqTexto(prompt, apiKey, maxTokens) {
+  const body = {
+    model: MODEL_TEXTO,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: maxTokens,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    })
+    if (res.status === 429) {
+      const err = await res.json().catch(() => ({}))
+      const m = (err?.error?.message || '').match(/try again in ([\d.]+)s/i)
+      const espera = m ? Math.ceil(parseFloat(m[1]) * 1000) + 800 : 15000
+      await sleep(Math.min(espera, 65000))
+      continue
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+    }
+    const data = await res.json()
+    return JSON.parse(data.choices?.[0]?.message?.content || '{}')
+  }
+  throw new Error('Limite de uso da IA atingido. Aguarde 1 minuto e tente de novo.')
+}
+
 // Classifica produtos do estoque em categorias usando o modelo de texto.
-// Processa em lotes (para caber no limite de tokens) e devolve um mapa
-// { nome: categoria }. `onProgresso(lote, total)` é opcional (para feedback).
+// Lotes pequenos + saída compacta (só as categorias, na ordem) para caber no
+// limite de tokens por minuto do Groq. `onProgresso(lote, total)` é opcional.
 export async function categorizarProdutos(nomes, categorias, apiKey, onProgresso) {
   const unicos = [...new Set((nomes || []).map(n => (n || '').trim()).filter(Boolean))]
   const mapa = {}
   if (unicos.length === 0) return mapa
 
-  const TAM = 80
+  const TAM = 50
   const lotes = []
   for (let i = 0; i < unicos.length; i += TAM) lotes.push(unicos.slice(i, i + TAM))
 
   for (let l = 0; l < lotes.length; l++) {
     if (onProgresso) onProgresso(l + 1, lotes.length)
     const lote = lotes[l]
-    const prompt = `Voce classifica produtos de estoque de uma pizzaria/restaurante em categorias. Para CADA nome da lista, escolha a categoria que melhor se encaixa, usando SOMENTE uma destas categorias EXATAS (copie a categoria escrita igual, com acentos):
-${categorias.map(c => `- ${c}`).join('\n')}
+    const prompt = `Classifique cada produto de estoque de uma pizzaria em UMA destas categorias EXATAS (copie igual, com acentos):
+${categorias.join(' | ')}
 
-Guia (exemplos, nao e regra rigida):
-- Laticinios e Frios: queijos, mussarela, catupiry, requeijao, creme de leite, manteiga, iogurte, leite, presunto/frios fatiados.
-- Proteinas: carnes, frango, linguica, bacon, peixe, camarao, ovos, hamburguer.
-- Hortifruti: frutas, legumes, verduras, tomate, cebola, alho, batata in natura, ervas frescas.
-- Mercearia: secos e enlatados, farinha, acucar, oleo, azeite, molho de tomate, massa seca, tempero, conservas, mel, enlatados.
-- Producoes Internas: itens feitos na propria cozinha (massa caseira, molho caseiro, recheio, base pronta).
-- Bebidas: refrigerante, suco, agua, cerveja, vinho, energetico, destilados.
-- Embalagens e Etiquetas: sacos, bandejas, potes, filme, papel, guardanapo, etiqueta, descartaveis.
-- Limpeza: detergente, sabao, alcool, agua sanitaria, desinfetante, esponja, panos de limpeza.
-- Porcionados: produtos ja porcionados/embalados em porcao (ex: "porcionado", "porcao").
-- Outros: quando nao se encaixa claramente em nenhuma.
+Guia rapido: Laticinios e Frios = queijo, catupiry, creme de leite, manteiga, leite, frios; Proteinas = carne, frango, linguica, bacon, peixe, ovo; Hortifruti = frutas, legumes, verduras frescas; Mercearia = farinha, acucar, oleo, azeite, molho, massa seca, tempero, enlatado, mel; Producoes Internas = feito na cozinha (massa/molho caseiro, recheio); Bebidas = refrigerante, suco, agua, cerveja, vinho; Embalagens e Etiquetas = saco, bandeja, pote, papel, filme, etiqueta, descartavel; Limpeza = detergente, sabao, alcool, desinfetante, esponja; Porcionados = itens porcionados; Outros = o resto.
 
-Lista:
+Produtos (responda na MESMA ORDEM, exatamente ${lote.length} itens):
 ${lote.map((n, i) => `${i + 1}. ${n}`).join('\n')}
 
-Retorne SOMENTE este JSON, com um item para CADA nome (categoria SEMPRE uma das listadas):
-{"itens":[{"nome":"nome exatamente como na lista","categoria":"categoria escolhida"}]}`
+Retorne SOMENTE: {"categorias":["categoria do item 1","categoria do item 2", ...]}`
 
-    const body = {
-      model: MODEL_TEXTO,
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 8192,
-      temperature: 0,
-      response_format: { type: 'json_object' },
-    }
-
-    const res = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
-    }
-    const data = await res.json()
-    const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}')
-    for (const it of parsed.itens || []) {
-      if (it?.nome && it?.categoria) mapa[it.nome.trim()] = it.categoria.trim()
+    const maxTokens = Math.min(2048, lote.length * 12 + 200)
+    const parsed = await chamarGroqTexto(prompt, apiKey, maxTokens)
+    const cats = Array.isArray(parsed.categorias) ? parsed.categorias : []
+    for (let i = 0; i < lote.length && i < cats.length; i++) {
+      const c = (cats[i] || '').trim()
+      if (c) mapa[lote[i]] = c
     }
   }
   return mapa
