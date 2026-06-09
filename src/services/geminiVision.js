@@ -358,7 +358,7 @@ Guia rapido: Laticinios e Frios = queijo, catupiry, creme de leite, manteiga, le
 Produtos (responda na MESMA ORDEM, exatamente ${lote.length} itens):
 ${lote.map((n, i) => `${i + 1}. ${n}`).join('\n')}
 
-Retorne SOMENTE: {"categorias":["categoria do item 1","categoria do item 2", ...]}`
+Retorne SOMENTE este JSON: {"categorias":["categoria do item 1","categoria do item 2", ...]}`
 
     const maxTokens = Math.min(2048, lote.length * 12 + 200)
     const parsed = await chamarGroqTexto(prompt, apiKey, maxTokens)
