@@ -300,6 +300,68 @@ Retorne SOMENTE este JSON:
   }
 }
 
+// Classifica produtos do estoque em categorias usando o modelo de texto.
+// Processa em lotes (para caber no limite de tokens) e devolve um mapa
+// { nome: categoria }. `onProgresso(lote, total)` é opcional (para feedback).
+export async function categorizarProdutos(nomes, categorias, apiKey, onProgresso) {
+  const unicos = [...new Set((nomes || []).map(n => (n || '').trim()).filter(Boolean))]
+  const mapa = {}
+  if (unicos.length === 0) return mapa
+
+  const TAM = 80
+  const lotes = []
+  for (let i = 0; i < unicos.length; i += TAM) lotes.push(unicos.slice(i, i + TAM))
+
+  for (let l = 0; l < lotes.length; l++) {
+    if (onProgresso) onProgresso(l + 1, lotes.length)
+    const lote = lotes[l]
+    const prompt = `Voce classifica produtos de estoque de uma pizzaria/restaurante em categorias. Para CADA nome da lista, escolha a categoria que melhor se encaixa, usando SOMENTE uma destas categorias EXATAS (copie a categoria escrita igual, com acentos):
+${categorias.map(c => `- ${c}`).join('\n')}
+
+Guia (exemplos, nao e regra rigida):
+- Laticinios e Frios: queijos, mussarela, catupiry, requeijao, creme de leite, manteiga, iogurte, leite, presunto/frios fatiados.
+- Proteinas: carnes, frango, linguica, bacon, peixe, camarao, ovos, hamburguer.
+- Hortifruti: frutas, legumes, verduras, tomate, cebola, alho, batata in natura, ervas frescas.
+- Mercearia: secos e enlatados, farinha, acucar, oleo, azeite, molho de tomate, massa seca, tempero, conservas, mel, enlatados.
+- Producoes Internas: itens feitos na propria cozinha (massa caseira, molho caseiro, recheio, base pronta).
+- Bebidas: refrigerante, suco, agua, cerveja, vinho, energetico, destilados.
+- Embalagens e Etiquetas: sacos, bandejas, potes, filme, papel, guardanapo, etiqueta, descartaveis.
+- Limpeza: detergente, sabao, alcool, agua sanitaria, desinfetante, esponja, panos de limpeza.
+- Porcionados: produtos ja porcionados/embalados em porcao (ex: "porcionado", "porcao").
+- Outros: quando nao se encaixa claramente em nenhuma.
+
+Lista:
+${lote.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+Retorne SOMENTE este JSON, com um item para CADA nome (categoria SEMPRE uma das listadas):
+{"itens":[{"nome":"nome exatamente como na lista","categoria":"categoria escolhida"}]}`
+
+    const body = {
+      model: MODEL_TEXTO,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 8192,
+      temperature: 0,
+      response_format: { type: 'json_object' },
+    }
+
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+    }
+    const data = await res.json()
+    const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}')
+    for (const it of parsed.itens || []) {
+      if (it?.nome && it?.categoria) mapa[it.nome.trim()] = it.categoria.trim()
+    }
+  }
+  return mapa
+}
+
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
