@@ -360,9 +360,17 @@ export function Estoque() {
         (i, n) => toast.loading(`Classificando... (lote ${i}/${n})`, { id: t })
       )
       const itens = produtos.map(p => {
-        const sug = mapa[p.nome.trim()]
         const atual = p.categoria || 'Outros'
-        const nova = (sug && CATEGORIAS.includes(sug)) ? sug : atual
+        let nova
+        // Produtos gerados por fichas de produção (categoria antiga "Produção"
+        // ou já "Produções Internas") vão SEMPRE para "Produções Internas",
+        // sem depender do palpite da IA pelo nome.
+        if (atual === 'Produção' || atual === 'Produções Internas') {
+          nova = 'Produções Internas'
+        } else {
+          const sug = mapa[p.nome.trim()]
+          nova = (sug && CATEGORIAS.includes(sug)) ? sug : atual
+        }
         return { id: p.id, nome: p.nome, atual, nova }
       })
       setCatItens(itens)
