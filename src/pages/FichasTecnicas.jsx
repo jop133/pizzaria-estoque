@@ -7,6 +7,7 @@ import { registrarProducao, registrarEvento } from '../services/estoque'
 import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
+import { lerPorcionadosXlsx } from '../lib/porcionados'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import { SeletorProduto } from '../components/SeletorProduto'
@@ -57,6 +58,34 @@ export function FichasTecnicas() {
     const original = e.target.files[0]
     e.target.value = ''
     if (!original) return
+
+    // Porcionados: aceita planilha xlsx (lê direto as colunas PRODUTO + MEDIDA, sem IA).
+    if (ehPorcionado && (/\.xlsx?$/i.test(original.name) || (original.type || '').includes('sheet'))) {
+      const t = toast.loading('Lendo planilha...')
+      try {
+        const itens = await lerPorcionadosXlsx(original)
+        const lista = itens.map(it => {
+          const insumo = acharProdutoPorNome(it.nome)
+          return {
+            nome: it.nome,
+            medida: it.medida ?? '',
+            unidadeMedida: UNIDADES_MEDIDA.includes((it.unidade || '').toLowerCase()) ? it.unidade.toLowerCase() : 'g',
+            unidade: 'pct',
+            insumoId: insumo?.id ?? null,
+          }
+        }).filter(x => x.nome)
+        toast.dismiss(t)
+        if (lista.length === 0) { toast.error('Nenhum porcionado encontrado na planilha.'); return }
+        setFotoAnalise(null)
+        setPorcionadosFoto(lista)
+        toast.success(`${lista.length} porcionado(s) lido(s). Revise antes de criar.`)
+      } catch (err) {
+        toast.dismiss(t)
+        toast.error('Erro ao ler planilha: ' + (err?.message || 'verifique o arquivo'), { duration: 6000 })
+      }
+      return
+    }
+
     let file = original
     if (original.type === 'application/pdf' || /\.pdf$/i.test(original.name)) {
       const t = toast.loading('Lendo arquivo...')
@@ -645,13 +674,13 @@ export function FichasTecnicas() {
               {fotoAnalise ? (
                 <img src={fotoAnalise.url} alt="" className="max-h-48 mx-auto rounded-lg object-contain" />
               ) : (
-                <p className="text-gray-400 text-sm">{ehPorcionado ? 'Foto da lista de porcionados (PRODUTO + MEDIDA)' : 'Foto da ficha técnica, cardápio ou receita'}</p>
+                <p className="text-gray-400 text-sm">{ehPorcionado ? 'Foto OU planilha (.xlsx) da lista de porcionados (PRODUTO + MEDIDA)' : 'Foto da ficha técnica, cardápio ou receita'}</p>
               )}
               <div className="flex gap-2 justify-center flex-wrap">
                 <button onClick={() => fileRefFoto.current.click()} className="btn-secondary text-sm">📁 Arquivo</button>
                 <button onClick={() => cameraRefFoto.current.click()} className="btn-secondary text-sm">📷 Câmera</button>
               </div>
-              <input ref={fileRefFoto} type="file" accept="image/*,application/pdf" className="hidden" onChange={analisarFoto} />
+              <input ref={fileRefFoto} type="file" accept={ehPorcionado ? 'image/*,application/pdf,.xlsx,.xls' : 'image/*,application/pdf'} className="hidden" onChange={analisarFoto} />
               <input ref={cameraRefFoto} type="file" accept="image/*" capture="environment" className="hidden" onChange={analisarFoto} />
             </div>
 
