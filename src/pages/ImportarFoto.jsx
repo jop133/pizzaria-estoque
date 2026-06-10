@@ -5,12 +5,11 @@ import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
-import { Badge } from '../components/Badge'
 import { Modal } from '../components/Modal'
+import { SeletorProduto } from '../components/SeletorProduto'
 import toast from 'react-hot-toast'
 
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
-const tipoCor = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', desconhecido: 'gray' }
 // Finalidade do lote de fotos (escolhida pelo usuário)
 const TIPOS_FOTO = [
   { value: 'entrada', label: '✅ Entrada (compra/reposição)' },
@@ -43,6 +42,7 @@ export function ImportarFoto() {
   const [tipoLote, setTipoLote] = useState('entrada') // finalidade escolhida para as fotos
   const [modalLancar, setModalLancar] = useState(false)
   const [incluirBranco, setIncluirBranco] = useState(false)
+  const [picker, setPicker] = useState(null) // { fotoId, idx, tipo } — seletor de vínculo
 
   const fileRef = useRef()
   const cameraRef = useRef()
@@ -423,307 +423,303 @@ export function ImportarFoto() {
     if (pulados > 0) toast(`${pulados} item(ns) em branco foram retirados da fila`, { icon: '⬜' })
   }
 
+  // Helpers do seletor de vínculo (busca)
+  function abrirPicker(fotoId, idx, tipo) { setPicker({ fotoId, idx, tipo }) }
+  function vincularProdutoPicker(p) {
+    if (!picker) return
+    atualizarItem(picker.fotoId, picker.idx, 'fichaId', null)
+    atualizarItem(picker.fotoId, picker.idx, 'produtoId', p.id)
+    setPicker(null)
+  }
+  function vincularFichaPicker(f) {
+    if (!picker) return
+    atualizarItem(picker.fotoId, picker.idx, 'produtoId', null)
+    atualizarItem(picker.fotoId, picker.idx, 'fichaId', f.id)
+    setPicker(null)
+  }
+  function criarNovoPicker() {
+    if (!picker) return
+    atualizarItem(picker.fotoId, picker.idx, 'produtoId', null)
+    atualizarItem(picker.fotoId, picker.idx, 'fichaId', null)
+    setPicker(null)
+  }
+
   const totalProntas = fila.filter(f => f.status === 'pronto').length
   const totalItensAtivos = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo).length, 0)
   const totalEmBranco = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo && itemIncompleto(i)).length, 0)
 
-  return (
-    <div className="space-y-4 max-w-lg mx-auto">
-      <h1 className="text-2xl font-bold text-gray-800">Importar por Foto</h1>
+  const fotosProntas = fila.filter(f => f.status === 'pronto')
+  const aguardando = fila.filter(f => f.status === 'aguardando')
+  const fotosErro = fila.filter(f => f.status === 'erro')
+  const analisando = fila.some(f => f.status === 'analisando')
+  const emRevisao = totalProntas > 0
+  const totalItens = fotosProntas.reduce((s, f) => s + f.itens.length, 0)
 
-      {editandoChave ? (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-          <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Groq (gratuita)</p>
-          <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">console.groq.com</span></p>
-          <input className="input" placeholder="gsk_..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
-          <button onClick={salvarChave} className="btn-primary w-full">Salvar Chave</button>
+  // Card de um item lido (na revisão). É uma função de render (chamada direto no
+  // map, NÃO usada como <Componente/>) para o React não remontar a cada tecla.
+  function renderItem(foto, item, i) {
+    const produtoVinculado = produtos.find(p => p.id === item.produtoId)
+    const fichaVinculada = fichas.find(f => f.id === item.fichaId)
+    const vinculo = fichaVinculada || produtoVinculado
+    const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
+    const ehNovoEntrada = !vinculo && foto.resultado.tipo === 'entrada'
+    const r = (!fichaVinculada && foto.resultado.tipo !== 'saida_ficha') ? calcular(item, unidadeAlvo) : { converter: false, precisaPeso: false, total: null }
+    const usaPeso = r.converter
+    const precisaPeso = r.precisaPeso
+    const total = r.total
+    const incompleto = item.ativo && itemIncompleto(item)
+    const cor = !item.ativo ? 'border-gray-200 bg-gray-50 opacity-60'
+      : incompleto ? 'border-yellow-300 bg-yellow-50'
+        : vinculo ? 'border-green-300 bg-green-50'
+          : ehNovoEntrada ? 'border-blue-200 bg-blue-50'
+            : 'border-red-200 bg-red-50'
+    const icone = !item.ativo ? '⬜' : incompleto ? '?' : vinculo ? '✓' : ehNovoEntrada ? '+' : '✕'
+
+    return (
+      <div key={`${foto.id}-${i}`} className={`border rounded-xl p-4 space-y-3 ${cor}`}>
+        <div className="flex items-start gap-2">
+          <span className="text-lg font-bold shrink-0">{icone}</span>
+          <p className="flex-1 min-w-0 font-semibold text-gray-800 leading-tight break-words">{item.nome}</p>
+          <button onClick={() => atualizarItem(foto.id, i, 'ativo', !item.ativo)} className="text-xs underline text-gray-500 shrink-0">
+            {item.ativo ? 'Pular' : 'Incluir'}
+          </button>
         </div>
-      ) : (
-        <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
-          <p className="text-sm text-green-700 font-medium">✅ API Groq configurada</p>
-          <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
-        </div>
-      )}
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-gray-700">Finalidade das fotos</p>
-        <div className="grid grid-cols-1 gap-2">
-          {TIPOS_FOTO.map(t => (
-            <button
-              key={t.value}
-              onClick={() => setTipoLote(t.value)}
-              className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
-                tipoLote === t.value
-                  ? 'border-red-700 bg-red-50 text-red-800'
-                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <p className="text-xs text-gray-400">Vale para todas as fotos da fila. Para tipos diferentes, faça em lotes separados.</p>
-      </div>
+        {item.ativo && (
+          <>
+            {/* Vínculo / criar novo */}
+            {ehNovoEntrada ? (
+              <div className="pl-7 space-y-2">
+                <div>
+                  <label className="label">Criar como (itens do mesmo tipo são unidos)</label>
+                  <input
+                    className="input text-sm"
+                    placeholder="Ex: Queijo Mussarela"
+                    value={item.nomeBase || ''}
+                    onChange={e => atualizarItem(foto.id, i, 'nomeBase', e.target.value)}
+                  />
+                  {(() => {
+                    const n = contarNoGrupo(normalizar(item.nomeBase || item.nome))
+                    return n > 1
+                      ? <p className="text-xs text-blue-600 mt-1">🔗 será unido com {n - 1} outro(s) deste tipo</p>
+                      : <p className="text-xs text-gray-400 mt-1">novo produto</p>
+                  })()}
+                </div>
+                <button onClick={() => abrirPicker(foto.id, i, 'entrada')} className="text-xs text-red-700 underline">
+                  vincular a produto existente
+                </button>
+              </div>
+            ) : (
+              <div className="pl-7 flex items-center gap-2 text-sm">
+                {vinculo
+                  ? <span className="text-green-700 truncate">✓ {vinculo.nome}</span>
+                  : <span className="text-red-600">Sem vínculo</span>}
+                <button onClick={() => abrirPicker(foto.id, i, foto.resultado.tipo)} className="text-xs text-red-700 underline ml-auto shrink-0">
+                  {vinculo ? 'trocar' : 'vincular'}
+                </button>
+              </div>
+            )}
 
-      <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
-        <p className="text-4xl">📷</p>
-        <p className="text-sm text-gray-500">Selecione uma ou várias fotos de uma vez</p>
-        <div className="flex gap-2 justify-center flex-wrap">
-          <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📁 Escolher arquivos</button>
-          <button onClick={() => cameraRef.current.click()} className="btn-secondary text-sm">📷 Tirar foto</button>
-        </div>
-        <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
-        <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
-      </div>
-
-      {fila.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-600">{fila.length} foto(s) na fila</p>
-            <button
-              onClick={analisarTodas}
-              disabled={!fila.some(f => f.status === 'aguardando') || !apiKey}
-              className="btn-primary text-sm disabled:opacity-50"
-            >
-              🔍 Analisar {fila.filter(f => f.status === 'aguardando').length > 0 ? `(${fila.filter(f => f.status === 'aguardando').length})` : ''}
-            </button>
-          </div>
-
-          {fila.map(foto => (
-            <div key={foto.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-              <div className="flex items-center gap-3 p-3 border-b border-gray-100">
-                <img src={foto.url} alt="" className="w-14 h-14 object-cover rounded-lg shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-700 truncate">{foto.file.name}</p>
-                  <div className="mt-1">
-                    {foto.status === 'aguardando' && <Badge color="gray">Aguardando análise</Badge>}
-                    {foto.status === 'analisando' && (
-                      <span className="flex items-center gap-1 text-xs text-blue-600">
-                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                        </svg>
-                        Analisando...
-                      </span>
-                    )}
-                    {foto.status === 'pronto' && <Badge color={tipoCor[foto.resultado.tipo]}>{tipoLabel[foto.resultado.tipo]}</Badge>}
-                    {foto.status === 'erro' && <Badge color="red">Erro na análise</Badge>}
+            {/* Quantidade / peso */}
+            <div className="pl-7">
+              {usaPeso ? (
+                <div className="flex items-end gap-1.5 flex-wrap">
+                  <div className="w-16">
+                    <label className="label">Qtd</label>
+                    <input type="number" min="0" step="1" className="input text-sm px-2" value={item.quantidade}
+                      onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)} />
+                  </div>
+                  <span className="pb-2 text-gray-400 text-sm">×</span>
+                  <div className="w-20">
+                    <label className="label">Peso/un</label>
+                    <input type="number" min="0" step="0.001" className="input text-sm px-2" placeholder="?" value={item.pesoEmbalagem}
+                      onChange={e => atualizarItem(foto.id, i, 'pesoEmbalagem', e.target.value)} />
+                  </div>
+                  <div className="w-16">
+                    <label className="label">Un</label>
+                    <select className="input text-sm px-1" value={item.unidadeEmbalagem}
+                      onChange={e => atualizarItem(foto.id, i, 'unidadeEmbalagem', e.target.value)}>
+                      {UNIDADES_PESO.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                  </div>
+                  <span className="pb-2 text-gray-400 text-sm">=</span>
+                  <div className="pb-2 text-sm font-semibold text-gray-700">
+                    {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${unidadeAlvo}`}
                   </div>
                 </div>
-                <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
-              </div>
-
-              {foto.status === 'erro' && (
-                <p className="text-xs text-red-600 p-3">{foto.erro}</p>
-              )}
-
-              {foto.status === 'pronto' && (
-                <div className="p-3 space-y-2">
-                  <p className="text-xs text-gray-500">{foto.resultado.descricao}</p>
-                  {foto.resultado.observacao && (
-                    <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">⚠️ {foto.resultado.observacao}</p>
-                  )}
-                  <div className="space-y-2">
-                    {foto.itens.map((item, i) => {
-                      const produtoVinculado = produtos.find(p => p.id === item.produtoId)
-                      const fichaVinculada = fichas.find(f => f.id === item.fichaId)
-                      const vinculo = fichaVinculada || produtoVinculado
-                      // Unidade-alvo: do produto vinculado, ou (produto novo) a base do peso lido.
-                      const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
-                      const ehNovoEntrada = !vinculo && foto.resultado.tipo === 'entrada'
-                      const r = (!fichaVinculada && foto.resultado.tipo !== 'saida_ficha')
-                        ? calcular(item, unidadeAlvo)
-                        : { converter: false, precisaPeso: false, total: null }
-                      const usaPeso = r.converter
-                      const precisaPeso = r.precisaPeso
-                      const total = r.total
-                      return (
-                        <div key={i} className={`border rounded-lg p-2 space-y-2 ${!item.ativo ? 'border-gray-100 opacity-50' : precisaPeso ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'}`}>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox" checked={item.ativo}
-                              onChange={e => atualizarItem(foto.id, i, 'ativo', e.target.checked)}
-                              className="w-4 h-4 accent-red-600 shrink-0"
-                            />
-                            <span className="text-sm font-medium text-gray-800 truncate">{item.nome}</span>
-                            {!vinculo && <Badge color="red">Sem vínculo</Badge>}
-                          </div>
-                          {usaPeso ? (
-                            <div className="ml-6 space-y-2">
-                              <div className="flex items-end gap-1.5 flex-wrap">
-                                <div className="w-16">
-                                  <label className="label">Qtd</label>
-                                  <input
-                                    type="number" min="0" step="1"
-                                    className="input text-sm px-2"
-                                    value={item.quantidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <span className="pb-2 text-gray-400 text-sm">×</span>
-                                <div className="w-20">
-                                  <label className="label">Peso/un</label>
-                                  <input
-                                    type="number" min="0" step="0.001"
-                                    className="input text-sm px-2"
-                                    placeholder="?"
-                                    value={item.pesoEmbalagem}
-                                    onChange={e => atualizarItem(foto.id, i, 'pesoEmbalagem', e.target.value)}
-                                  />
-                                </div>
-                                <div className="w-16">
-                                  <label className="label">Un</label>
-                                  <select
-                                    className="input text-sm px-1"
-                                    value={item.unidadeEmbalagem}
-                                    onChange={e => atualizarItem(foto.id, i, 'unidadeEmbalagem', e.target.value)}
-                                  >
-                                    {UNIDADES_PESO.map(u => <option key={u} value={u}>{u}</option>)}
-                                  </select>
-                                </div>
-                                <span className="pb-2 text-gray-400 text-sm">=</span>
-                                <div className="pb-2 text-sm font-semibold text-gray-700">
-                                  {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${unidadeAlvo}`}
-                                </div>
-                              </div>
-                              <div>
-                                <label className="label">Produto</label>
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              </div>
-                            </div>
-                          ) : ehNovoEntrada ? (
-                            <div className="ml-6 space-y-2">
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="label">Quantidade</label>
-                                  <input
-                                    type="number" min="0.001" step="0.001"
-                                    className="input text-sm"
-                                    value={item.quantidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <div>
-                                  <label className="label">Unidade</label>
-                                  <select
-                                    className="input text-sm"
-                                    value={item.unidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'unidade', e.target.value)}
-                                  >
-                                    {UNIDADES_NOVO.map(u => <option key={u} value={u}>{ROTULO_UNIDADE[u] || u}</option>)}
-                                  </select>
-                                </div>
-                              </div>
-                              <div>
-                                <label className="label">Vincular a produto existente (opcional)</label>
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- criar novo produto --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              </div>
-                            </div>
-                          ) : (
-                          <div className="grid grid-cols-2 gap-2 ml-6">
-                            <div>
-                              <label className="label">Quantidade</label>
-                              <input
-                                type="number" min="0.001" step="0.001"
-                                className="input text-sm"
-                                value={item.quantidade}
-                                onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                              />
-                            </div>
-                            <div>
-                              <label className="label">Produto/Ficha</label>
-                              {foto.resultado.tipo === 'saida_ficha' ? (
-                                <select
-                                  className="input text-sm"
-                                  value={item.fichaId ?? item.produtoId ?? ''}
-                                  onChange={e => {
-                                    const val = parseInt(e.target.value)
-                                    const isFicha = fichas.some(f => f.id === val)
-                                    atualizarItem(foto.id, i, 'fichaId', isFicha ? val : null)
-                                    atualizarItem(foto.id, i, 'produtoId', isFicha ? null : val)
-                                  }}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  <optgroup label="Fichas">{fichas.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}</optgroup>
-                                  <optgroup label="Produtos">{produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}</optgroup>
-                                </select>
-                              ) : (
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              )}
-                            </div>
-                          </div>
-                          )}
-                          {foto.resultado.tipo === 'entrada' && (
-                            <div className="ml-6">
-                              <label className="label">Marca (opcional)</label>
-                              <input
-                                className="input text-sm"
-                                placeholder="Ex: Tio João"
-                                value={item.marca || ''}
-                                onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)}
-                              />
-                            </div>
-                          )}
-                          {ehNovoEntrada && (
-                            <div className="ml-6">
-                              <label className="label">Criar como (itens com o mesmo nome são unidos)</label>
-                              <input
-                                className="input text-sm"
-                                placeholder="Ex: Queijo Mussarela"
-                                value={item.nomeBase || ''}
-                                onChange={e => atualizarItem(foto.id, i, 'nomeBase', e.target.value)}
-                              />
-                              {(() => {
-                                const n = contarNoGrupo(normalizar(item.nomeBase || item.nome))
-                                return n > 1
-                                  ? <p className="text-xs text-blue-600 mt-1">🔗 será unido com {n - 1} outro(s) item(ns) deste tipo</p>
-                                  : <p className="text-xs text-gray-400 mt-1">novo produto</p>
-                              })()}
-                            </div>
-                          )}
-                          {vinculo && <p className="ml-6 text-xs text-green-600">✓ {vinculo.nome}</p>}
-                        </div>
-                      )
-                    })}
+              ) : ehNovoEntrada ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="label">Quantidade</label>
+                    <input type="number" min="0.001" step="0.001" className="input text-sm" value={item.quantidade}
+                      onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)} />
                   </div>
+                  <div>
+                    <label className="label">Unidade</label>
+                    <select className="input text-sm" value={item.unidade}
+                      onChange={e => atualizarItem(foto.id, i, 'unidade', e.target.value)}>
+                      {UNIDADES_NOVO.map(u => <option key={u} value={u}>{ROTULO_UNIDADE[u] || u}</option>)}
+                    </select>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label className="label">Quantidade</label>
+                  <input type="number" min="0.001" step="0.001" className="input text-sm" value={item.quantidade}
+                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)} />
                 </div>
               )}
             </div>
-          ))}
 
-          {totalProntas > 0 && (
-            <button
-              onClick={() => { setIncluirBranco(false); setModalLancar(true) }}
-              disabled={confirmando || totalItensAtivos === 0}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {confirmando ? 'Lançando...' : `✅ Confirmar e Lançar ${totalItensAtivos} item(ns) de ${totalProntas} foto(s)`}
-            </button>
+            {/* Marca (entrada) */}
+            {foto.resultado.tipo === 'entrada' && (
+              <div className="pl-7">
+                <label className="label">Marca (opcional)</label>
+                <input className="input text-sm" placeholder="Ex: Tio João" value={item.marca || ''}
+                  onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)} />
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4 max-w-lg mx-auto pb-28">
+      {/* Inputs de arquivo (sempre montados) */}
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
+
+      {/* ----------------------------- TELA INICIAL ----------------------------- */}
+      {!emRevisao && (
+        <>
+          <h1 className="text-2xl font-bold text-gray-800">Lançar com IA</h1>
+
+          {editandoChave ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Groq (gratuita)</p>
+              <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">console.groq.com</span></p>
+              <input className="input" placeholder="gsk_..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
+              <button onClick={salvarChave} className="btn-primary w-full">Salvar Chave</button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+              <p className="text-sm text-green-700 font-medium">✅ IA configurada</p>
+              <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
+            </div>
           )}
-        </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-700">Finalidade das fotos</p>
+            <div className="grid grid-cols-1 gap-2">
+              {TIPOS_FOTO.map(t => (
+                <button
+                  key={t.value}
+                  onClick={() => setTipoLote(t.value)}
+                  className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
+                    tipoLote === t.value
+                      ? 'border-red-700 bg-red-50 text-red-800'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400">Vale para todas as fotos da fila. Para tipos diferentes, faça em lotes separados.</p>
+          </div>
+
+          {analisando ? (
+            <div className="bg-white border border-gray-200 rounded-xl p-8 text-center space-y-3">
+              <svg className="animate-spin h-8 w-8 mx-auto text-red-700" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              <p className="text-sm text-gray-600">Analisando foto(s)...</p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
+                <p className="text-4xl">📷</p>
+                <p className="text-sm text-gray-500">Selecione uma ou várias fotos de uma vez</p>
+                <div className="flex gap-2 justify-center flex-wrap">
+                  <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📁 Escolher arquivos</button>
+                  <button onClick={() => cameraRef.current.click()} className="btn-secondary text-sm">📷 Tirar foto</button>
+                </div>
+              </div>
+
+              {aguardando.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-gray-600">{aguardando.length} foto(s) na fila</p>
+                    <button onClick={analisarTodas} disabled={!apiKey} className="btn-primary text-sm disabled:opacity-50">
+                      🔍 Analisar ({aguardando.length})
+                    </button>
+                  </div>
+                  {aguardando.map(foto => (
+                    <div key={foto.id} className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl p-2">
+                      <img src={foto.url} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" />
+                      <p className="flex-1 min-w-0 text-sm text-gray-700 truncate">{foto.file.name}</p>
+                      <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {fotosErro.map(foto => (
+                <p key={foto.id} className="text-xs text-red-600">
+                  Erro ao ler {foto.file.name}: {foto.erro}{' '}
+                  <button onClick={() => removerFoto(foto.id)} className="underline">remover</button>
+                </p>
+              ))}
+            </>
+          )}
+        </>
       )}
 
+      {/* ------------------------------- REVISÃO ------------------------------- */}
+      {emRevisao && (
+        <>
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-bold text-gray-800">Revisar — {tipoLabel[tipoLote]}</h1>
+            <button onClick={() => setFila([])} className="text-sm text-gray-500 underline">Limpar</button>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+            <p className="text-sm text-gray-600">
+              <strong>{totalItens}</strong> item(ns) lidos. Confira os vínculos e quantidades antes de lançar.
+            </p>
+            {totalEmBranco > 0 && (
+              <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+                ⚠️ {totalEmBranco} item(ns) em branco (sem quantidade ou sem peso).
+              </p>
+            )}
+            <button onClick={() => fileRef.current.click()} className="text-sm text-red-700 underline">+ Adicionar outra foto</button>
+            {aguardando.length > 0 && (
+              <button onClick={analisarTodas} className="btn-secondary w-full text-sm">🔍 Analisar {aguardando.length} nova(s)</button>
+            )}
+          </div>
+
+          {fotosProntas.flatMap(foto =>
+            foto.itens.map((item, i) => renderItem(foto, item, i))
+          )}
+
+          <div className="fixed bottom-16 left-0 right-0 p-3 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent">
+            <div className="max-w-lg mx-auto">
+              <button
+                onClick={() => { setIncluirBranco(false); setModalLancar(true) }}
+                disabled={confirmando || totalItensAtivos === 0}
+                className="btn-primary w-full text-base py-3 disabled:opacity-50 shadow-lg"
+              >
+                {confirmando ? 'Lançando...' : `Lançar ${totalItensAtivos} item(ns)`}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Modal: confirmar lançamento (itens em branco) */}
       {modalLancar && (
         <Modal title="Confirmar lançamento" onClose={() => setModalLancar(false)}>
           <div className="space-y-4">
@@ -764,6 +760,28 @@ export function ImportarFoto() {
           </div>
         </Modal>
       )}
+
+      {/* Seletor de vínculo (busca) */}
+      {picker && (picker.tipo === 'saida_ficha' ? (
+        <SeletorProduto
+          titulo="Vincular a ficha ou produto"
+          produtos={[
+            ...fichas.map(f => ({ id: `f-${f.id}`, nome: `🍕 ${f.nome}`, unidade: 'ficha', _ficha: f })),
+            ...produtos.map(p => ({ id: `p-${p.id}`, nome: p.nome, unidade: p.unidade, _produto: p })),
+          ]}
+          onEscolher={c => c._ficha ? vincularFichaPicker(c._ficha) : vincularProdutoPicker(c._produto)}
+          onClose={() => setPicker(null)}
+        />
+      ) : (
+        <SeletorProduto
+          titulo="Vincular a produto"
+          produtos={produtos}
+          descricao={p => `${p.quantidade} ${p.unidade}`}
+          onEscolher={vincularProdutoPicker}
+          onClose={() => setPicker(null)}
+          opcaoExtra={picker.tipo === 'entrada' ? { label: '+ Criar produto novo (não vincular)', onEscolher: criarNovoPicker } : undefined}
+        />
+      ))}
     </div>
   )
 }
