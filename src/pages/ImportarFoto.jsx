@@ -5,12 +5,11 @@ import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
-import { Badge } from '../components/Badge'
-import { Modal } from '../components/Modal'
+import { SeletorProduto } from '../components/SeletorProduto'
+import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 const tipoLabel = { entrada: 'Entrada', saida_ficha: 'Saída por Ficha', saida_manual: 'Saída Manual', desconhecido: 'Não identificado' }
-const tipoCor = { entrada: 'green', saida_ficha: 'orange', saida_manual: 'red', desconhecido: 'gray' }
 // Finalidade do lote de fotos (escolhida pelo usuário)
 const TIPOS_FOTO = [
   { value: 'entrada', label: '✅ Entrada (compra/reposição)' },
@@ -18,15 +17,7 @@ const TIPOS_FOTO = [
   { value: 'saida_manual', label: '📦 Saída Manual (descarte/uso)' },
 ]
 const UNIDADES_PESO = ['kg', 'g', 'l', 'ml']
-// Item "em branco" = ativo mas sem quantidade válida (vazia ou 0).
-const itemEmBranco = (item) => !(parseFloat(item?.quantidade) > 0)
-// Unidades oferecidas ao criar um produto novo (contagem + peso direto)
-const UNIDADES_NOVO = ['un', 'pct', 'cx', 'dz', 'fardo', 'saco', 'lata', 'bandeja', 'kg', 'g', 'l', 'ml']
-const ROTULO_UNIDADE = {
-  un: 'Unidade (un)', pct: 'Pacote (pct)', cx: 'Caixa (cx)', dz: 'Dúzia (dz)',
-  fardo: 'Fardo', saco: 'Saco', lata: 'Lata', bandeja: 'Bandeja',
-  kg: 'Quilo (kg)', g: 'Grama (g)', l: 'Litro (l)', ml: 'Mililitro (ml)',
-}
+const round3 = v => Math.round((v || 0) * 1000) / 1000
 
 export function ImportarFoto() {
   const produtos = useProdutos()
@@ -41,8 +32,11 @@ export function ImportarFoto() {
   const [fila, setFila] = useState([])
   const [confirmando, setConfirmando] = useState(false)
   const [tipoLote, setTipoLote] = useState('entrada') // finalidade escolhida para as fotos
-  const [modalLancar, setModalLancar] = useState(false)
-  const [incluirBranco, setIncluirBranco] = useState(false)
+  const [picker, setPicker] = useState(null) // { linhas, tipoFoto } — seletor de vínculo do grupo
+  const [pularGrupos, setPularGrupos] = useState({})    // { chave: true }
+  const [confirmGrupos, setConfirmGrupos] = useState({}) // { chave: true }
+  const [totaisManuais, setTotaisManuais] = useState({}) // { chave: '40.5' } override do total
+  const [marcasGrupo, setMarcasGrupo] = useState({})     // { chave: 'Tio João' }
 
   const fileRef = useRef()
   const cameraRef = useRef()
@@ -100,7 +94,6 @@ export function ImportarFoto() {
   }
 
   function encontrarProdutoId(nomeCadastrado, nome) {
-    // Se a IA indicou nomeCadastrado, usa só correspondência exata
     if (nomeCadastrado) {
       const exato = produtos.find(p => p.nome.toLowerCase() === nomeCadastrado.toLowerCase())
       return exato?.id ?? null
@@ -108,7 +101,6 @@ export function ImportarFoto() {
     const busca = (nome || '').toLowerCase()
     const exato = produtos.find(p => p.nome.toLowerCase() === busca)
     if (exato) return exato.id
-    // Parcial: só aceita se todas as palavras do produto aparecem como palavras inteiras na busca
     const parcial = produtos.find(p => matchPorPalavras(p.nome.toLowerCase(), busca))
     return parcial?.id ?? null
   }
@@ -123,24 +115,6 @@ export function ImportarFoto() {
   }
 
   const normalizar = s => (s || '').trim().toLowerCase()
-
-  // Item que será criado como produto novo: só em ENTRADA (compra/reposição).
-  // Vendas e descartes apenas vinculam a produtos/fichas já existentes.
-  function ehProdutoNovo(item, tipoFoto) {
-    return item.ativo && !item.produtoId && !item.fichaId && tipoFoto === 'entrada'
-  }
-
-  // Quantos itens (em toda a fila) serão unidos no mesmo produto novo.
-  function contarNoGrupo(baseKey) {
-    let n = 0
-    for (const f of fila) {
-      if (f.status !== 'pronto') continue
-      for (const it of f.itens) {
-        if (ehProdutoNovo(it, f.resultado?.tipo) && normalizar(it.nomeBase || it.nome) === baseKey) n++
-      }
-    }
-    return n
-  }
 
   // Unidade-base para um peso lido: g/kg -> kg, ml/l -> l. Senão null.
   function unidadeBaseDoPeso(unidadePeso) {
@@ -167,10 +141,6 @@ export function ImportarFoto() {
   }
 
   // Decide como contabilizar o item e retorna { converter, precisaPeso, total }.
-  // - converter=true  -> é embalagem de um produto por peso (contagem × peso).
-  //   precisaPeso=true quando falta o peso da embalagem (bloqueia até informar).
-  // - converter=false -> quantidade entra direto na unidade (peso direto tipo
-  //   "filé 5,466 kg", ou contagem simples como un/pct/cx).
   function calcular(item, unidadeAlvo) {
     const u = (unidadeAlvo || '').toLowerCase()
     const count = parseFloat(item.quantidade) || 0
@@ -182,12 +152,9 @@ export function ImportarFoto() {
         if (valor && fator !== undefined) return { converter: true, precisaPeso: false, total: Math.round(count * valor * fator * 1000) / 1000 }
         return { converter: true, precisaPeso: true, total: null }
       }
-      // Unidade-alvo é peso, mas sem peso de embalagem:
-      // se o item já está em unidade de peso, a quantidade é o próprio peso (direto).
       if (UNIDADES_PESO.includes((item.unidade || '').toLowerCase())) {
         return { converter: false, precisaPeso: false, total: count }
       }
-      // Item contado em embalagens de um produto por peso, mas peso não lido.
       return { converter: true, precisaPeso: true, total: null }
     }
     return { converter: false, precisaPeso: false, total: count }
@@ -210,7 +177,6 @@ export function ImportarFoto() {
   function construirItem(item, mapaBase) {
     const nomeBase = (mapaBase[(item.nome || '').trim()] || item.nome || '').trim()
 
-    // Vínculo: tenta pelo nome lido; se não achar, tenta pelo nomeBase (tipo).
     let produtoId = encontrarProdutoId(item.nomeCadastrado, item.nome)
     if (!produtoId && nomeBase) produtoId = encontrarProdutoId(null, nomeBase)
     let fichaId = encontrarFichaId(item.nomeCadastrado, item.nome)
@@ -221,8 +187,6 @@ export function ImportarFoto() {
 
     let pesoEmbalagem = item.pesoEmbalagem ?? ''
     let unidadeEmbalagem = (item.unidadeEmbalagem || '').toLowerCase()
-    // Se a IA não preencheu peso/volume explícito (comum em líquidos),
-    // tenta extrair do próprio nome do item (ex: "OLEO 900ML" -> 900 ml).
     const temExplicito = String(pesoEmbalagem).trim() !== '' && UNIDADES_PESO.includes(unidadeEmbalagem)
     if (!temExplicito) {
       const m = (item.nome || '').match(/(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
@@ -231,15 +195,10 @@ export function ImportarFoto() {
         unidadeEmbalagem = m[2].toLowerCase()
       }
     }
-    // Se o produto é por peso e ainda não há unidade da embalagem,
-    // assume a própria unidade do produto como padrão para o usuário ajustar.
     if (UNIDADES_PESO.includes(prodUnidade) && !UNIDADES_PESO.includes(unidadeEmbalagem)) {
       unidadeEmbalagem = prodUnidade
     }
-    // Normaliza a unidade do item para uma das opções conhecidas (códigos de
-    // nota tipo "UNI", "PT" viram "un"); peso direto como "kg" é preservado.
     let unidade = (item.unidade || 'un').toLowerCase()
-    if (!UNIDADES_NOVO.includes(unidade)) unidade = 'un'
     return {
       ...item,
       ativo: true,
@@ -251,6 +210,7 @@ export function ImportarFoto() {
       unidadeEmbalagem,
       unidade,
       nomeBase,
+      grupoNovo: normalizar(nomeBase), // chave estável p/ agrupar "produtos novos" do mesmo tipo
     }
   }
 
@@ -259,23 +219,19 @@ export function ImportarFoto() {
     const pendentes = fila.filter(f => f.status === 'aguardando')
     if (!pendentes.length) return toast.error('Nenhuma foto aguardando análise')
 
-    // 1) Leitura por visão (uma chamada por foto) — inalterada.
     const analisadas = []
     for (const foto of pendentes) {
       setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'analisando' } : f))
       try {
         const { base64, mimeType } = await prepararImagem(foto.file)
         const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey, tipoLote)
-        res.tipo = tipoLote // finalidade definida pelo usuário (não depende da IA)
+        res.tipo = tipoLote
         analisadas.push({ fotoId: foto.id, res })
       } catch (e) {
         setFila(prev => prev.map(f => f.id === foto.id ? { ...f, status: 'erro', erro: e.message } : f))
       }
     }
 
-    // 2) Agrupamento por tipo: 1 chamada SÓ DE TEXTO para todo o lote.
-    //    Só faz sentido para criar/unir produtos (entrada e saída manual).
-    //    Em venda (saída por ficha) os itens casam com fichas: pular agrupamento.
     let mapaBase = {}
     if (tipoLote !== 'saida_ficha') {
       const todosNomes = analisadas.flatMap(a => (a.res.itens || []).map(it => it.nome))
@@ -286,7 +242,6 @@ export function ImportarFoto() {
       }
     }
 
-    // 3) Monta os itens (vínculo + peso + nomeBase) e marca as fotos como prontas.
     for (const { fotoId, res } of analisadas) {
       const itens = (res.itens || []).map(item => construirItem(item, mapaBase))
       setFila(prev => prev.map(f => f.id === fotoId ? { ...f, status: 'pronto', resultado: res, itens } : f))
@@ -302,468 +257,435 @@ export function ImportarFoto() {
     }))
   }
 
-  // Item "em branco"/incompleto: sem quantidade, ou produto por peso sem o peso.
-  function itemIncompleto(item) {
-    if (itemEmBranco(item)) return true
-    if (item.fichaId) return false
-    const prod = produtos.find(p => p.id === item.produtoId)
-    const unidadeAlvo = unidadeAlvoDoItem(item, prod)
-    const r = calcular(item, unidadeAlvo)
-    return r.converter && (r.precisaPeso || !r.total)
+  // ---------------------------------------------------------------------------
+  // Agrupamento dos itens lidos (por produto/ficha vinculado), como na tela de Preços.
+  // ---------------------------------------------------------------------------
+  const fotosProntas = fila.filter(f => f.status === 'pronto')
+
+  function chaveDe(foto, item, idx) {
+    if (item.fichaId) return { chave: `f-${item.fichaId}`, tipo: 'ficha' }
+    if (item.produtoId) return { chave: `p-${item.produtoId}`, tipo: 'produto' }
+    if (foto.resultado.tipo === 'entrada') return { chave: `novo-${item.grupoNovo}`, tipo: 'novo' }
+    return { chave: `sem-${foto.id}-${idx}`, tipo: 'sem' }
   }
 
-  async function confirmarTodos(incluirEmBranco = false) {
-    const prontas = fila.filter(f => f.status === 'pronto')
-    if (!prontas.length) return toast.error('Nenhuma foto analisada para confirmar')
-
-    setConfirmando(true)
-    let pulados = 0
-    let ok = 0
-    let criados = 0
-    let erros = 0
-    // Índices já resolvidos por foto (lançados OU pulados), para sair da fila.
-    const processadosPorFoto = {}
-    // Produtos novos criados nesta confirmação, por nomeBase, para unir itens
-    // não cadastrados do mesmo tipo num único produto.
-    const criadosPorBase = {}
-
-    for (const foto of prontas) {
-      processadosPorFoto[foto.id] = new Set()
-      for (let i = 0; i < foto.itens.length; i++) {
-        const item = foto.itens[i]
-        if (!item.ativo) continue
-        // Item em branco/incompleto: sem a opção marcada, pula e sai da fila.
-        if (itemIncompleto(item) && !incluirEmBranco) {
-          pulados++
-          processadosPorFoto[foto.id].add(i)
-          continue
-        }
-        try {
-          let produtoId = item.produtoId
-          let fichaId = item.fichaId
-          const vaiCriar = !produtoId && !fichaId && foto.resultado.tipo === 'entrada'
-
-          // Unidade em que o item será contabilizado (produto existente, novo
-          // com peso, ou unidade simples). Definida ANTES de criar o produto.
-          let unidadeAlvo
-          if (produtoId) {
-            unidadeAlvo = (produtos.find(p => p.id === produtoId)?.unidade || '').toLowerCase()
-          } else if (vaiCriar) {
-            unidadeAlvo = unidadeAlvoDoItem(item, null)
-          }
-
-          // Total que vai para o estoque: embalagem×peso (quando aplicável) ou a
-          // própria quantidade. Se faltar o peso e o usuário optou por lançar
-          // mesmo assim, usa a quantidade crua (sem conversão).
-          let quantidadeFinal = parseFloat(item.quantidade) || 0
-          if (!fichaId) {
-            const { converter, precisaPeso, total } = calcular(item, unidadeAlvo)
-            if (converter && (precisaPeso || !total)) {
-              quantidadeFinal = parseFloat(item.quantidade) || 0
-            } else {
-              quantidadeFinal = total
-            }
-          }
-
-          if (vaiCriar) {
-            const baseKey = normalizar(item.nomeBase || item.nome)
-            if (criadosPorBase[baseKey]) {
-              // Já criado nesta confirmação por outro item do mesmo tipo: reaproveita.
-              produtoId = criadosPorBase[baseKey]
-            } else {
-              const nomeNovo = (item.nomeBase || item.nome || '').trim()
-              const { data: novo } = await supabase.from('produtos').insert({
-                organizacao_id: session.organizacaoId,
-                nome: nomeNovo,
-                categoria: 'Outros',
-                unidade: unidadeAlvo || 'un',
-                quantidade: 0,
-                estoque_minimo: 0,
-              }).select().single()
-              produtoId = novo?.id
-              if (produtoId) criadosPorBase[baseKey] = produtoId
-              criados++
-            }
-          }
-
-          if (foto.resultado.tipo === 'entrada') {
-            if (!produtoId) { erros++; continue }
-            await registrarEntrada(produtoId, quantidadeFinal, 'Importado por foto', item.marca || '')
-          } else if (foto.resultado.tipo === 'saida_ficha') {
-            if (fichaId) await registrarSaidaFicha(fichaId, quantidadeFinal, 'Importado por foto')
-            else if (produtoId) await registrarSaidaManual(produtoId, quantidadeFinal, 'Importado por foto')
-            else { erros++; continue }
-          } else {
-            if (!produtoId) { erros++; continue }
-            await registrarSaidaManual(produtoId, quantidadeFinal, 'Importado por foto')
-          }
-          ok++
-          processadosPorFoto[foto.id].add(i)
-        } catch { erros++ }
+  const grupos = []
+  const mapaGrupos = new Map()
+  for (const foto of fotosProntas) {
+    foto.itens.forEach((item, idx) => {
+      const { chave, tipo } = chaveDe(foto, item, idx)
+      let g = mapaGrupos.get(chave)
+      if (!g) {
+        g = { chave, tipo, tipoFoto: foto.resultado.tipo, produtoId: item.produtoId, fichaId: item.fichaId, linhas: [] }
+        mapaGrupos.set(chave, g)
+        grupos.push(g)
       }
+      g.linhas.push({ foto, item, idx })
+    })
+  }
+
+  // Unidade do grupo: do produto vinculado; 'un' p/ ficha; senão a do 1º item (peso/lida).
+  function unidadeGrupo(g) {
+    if (g.tipo === 'produto') return (produtos.find(p => p.id === g.produtoId)?.unidade || 'un').toLowerCase()
+    if (g.tipo === 'ficha') return 'un'
+    return unidadeAlvoDoItem(g.linhas[0].item, null)
+  }
+  // Cálculo de uma linha na unidade do grupo.
+  function calcLinha(g, item, unidade) {
+    if (g.tipo === 'ficha') return { converter: false, precisaPeso: false, total: parseFloat(item.quantidade) || 0 }
+    return calcular(item, unidade)
+  }
+  function somaGrupo(g, unidade) {
+    return round3(g.linhas.reduce((s, l) => s + (calcLinha(g, l.item, unidade).total || 0), 0))
+  }
+
+  // --- Ações dos grupos ---
+  function abrirPickerGrupo(g) { setPicker({ linhas: g.linhas, tipoFoto: g.tipoFoto }) }
+  function vincularLinhas(linhas, patch) {
+    linhas.forEach(l => Object.entries(patch).forEach(([c, v]) => atualizarItem(l.foto.id, l.idx, c, v)))
+  }
+  function vincularProdutoPicker(p) {
+    if (picker) vincularLinhas(picker.linhas, { fichaId: null, produtoId: p.id })
+    setPicker(null)
+  }
+  function vincularFichaPicker(f) {
+    if (picker) vincularLinhas(picker.linhas, { produtoId: null, fichaId: f.id })
+    setPicker(null)
+  }
+  function criarNovoPicker() {
+    if (picker) vincularLinhas(picker.linhas, { produtoId: null, fichaId: null })
+    setPicker(null)
+  }
+  // Tira uma linha do grupo. Se está vinculada a produto/ficha, desvincula (vira
+  // "produto novo" na entrada, ou "sem vínculo"). Se já é "produto novo", recebe
+  // uma chave única para se separar dos demais do mesmo tipo.
+  function desagrupar(l) {
+    if (l.item.produtoId || l.item.fichaId) {
+      atualizarItem(l.foto.id, l.idx, 'produtoId', null)
+      atualizarItem(l.foto.id, l.idx, 'fichaId', null)
+    } else {
+      atualizarItem(l.foto.id, l.idx, 'grupoNovo', `solo-${Math.random().toString(36).slice(2)}`)
+    }
+  }
+  // Edita um campo de uma linha e limpa o override do total (volta ao auto).
+  function editarLinha(l, campo, valor, chave) {
+    atualizarItem(l.foto.id, l.idx, campo, valor)
+    setTotaisManuais(prev => {
+      if (!(chave in prev)) return prev
+      const n = { ...prev }; delete n[chave]; return n
+    })
+  }
+  function editarTotal(chave, valor) { setTotaisManuais(prev => ({ ...prev, [chave]: valor })) }
+  function editarNomeNovo(g, valor) { g.linhas.forEach(l => atualizarItem(l.foto.id, l.idx, 'nomeBase', valor)) }
+  function togglePular(chave) {
+    setPularGrupos(prev => ({ ...prev, [chave]: !prev[chave] }))
+    setConfirmGrupos(prev => { const n = { ...prev }; delete n[chave]; return n })
+  }
+  function confirmarGrupo(chave) { setConfirmGrupos(prev => ({ ...prev, [chave]: true })) }
+
+  const gruposAtivos = grupos.filter(g => !pularGrupos[g.chave])
+  const gruposConfirmados = gruposAtivos.filter(g => confirmGrupos[g.chave])
+
+  async function lancarConfirmados() {
+    if (!gruposConfirmados.length) return toast.error('Confirme ao menos um item para lançar')
+    setConfirmando(true)
+    let ok = 0, criados = 0, erros = 0
+    const lancados = [] // { fotoId, idx }
+
+    for (const g of gruposConfirmados) {
+      const unidade = unidadeGrupo(g)
+      const override = totaisManuais[g.chave]
+      const qtd = (override != null && String(override).trim() !== '')
+        ? parseFloat(String(override).replace(',', '.'))
+        : somaGrupo(g, unidade)
+      if (isNaN(qtd) || qtd <= 0) { erros++; continue }
+
+      try {
+        let produtoId = g.produtoId
+        if (g.tipo === 'novo') {
+          const nome = (g.linhas[0].item.nomeBase || g.linhas[0].item.nome || '').trim()
+          const { data: novo } = await supabase.from('produtos').insert({
+            organizacao_id: session.organizacaoId,
+            nome, categoria: 'Outros', unidade: unidade || 'un', quantidade: 0, estoque_minimo: 0,
+          }).select().single()
+          produtoId = novo?.id
+          if (produtoId) criados++
+        }
+
+        if (g.tipoFoto === 'entrada') {
+          if (!produtoId) { erros++; continue }
+          await registrarEntrada(produtoId, qtd, 'Importado por foto', marcasGrupo[g.chave] || '')
+        } else if (g.tipoFoto === 'saida_ficha') {
+          if (g.fichaId) await registrarSaidaFicha(g.fichaId, qtd, 'Importado por foto')
+          else if (produtoId) await registrarSaidaManual(produtoId, qtd, 'Importado por foto')
+          else { erros++; continue }
+        } else {
+          if (!produtoId) { erros++; continue }
+          await registrarSaidaManual(produtoId, qtd, 'Importado por foto')
+        }
+        ok++
+        g.linhas.forEach(l => lancados.push({ fotoId: l.foto.id, idx: l.idx }))
+      } catch { erros++ }
     }
 
     setConfirmando(false)
 
-    // Remove da fila os itens já resolvidos (lançados ou pulados em branco);
-    // o que sobrou (ex: sem vínculo) continua para revisão.
+    // Remove da fila as linhas lançadas; o resto continua para revisão.
+    const porFoto = {}
+    lancados.forEach(({ fotoId, idx }) => { (porFoto[fotoId] = porFoto[fotoId] || new Set()).add(idx) })
     setFila(prev => prev.flatMap(f => {
-      const proc = processadosPorFoto[f.id]
-      if (!proc) return [f]
-      const itens = f.itens.filter((it, i) => !proc.has(i))
-      if (itens.length === 0) return []
-      return [{ ...f, itens }]
+      const s = porFoto[f.id]
+      if (!s) return [f]
+      const itens = f.itens.filter((_, i) => !s.has(i))
+      return itens.length ? [{ ...f, itens }] : []
     }))
+    setConfirmGrupos({})
+    setPularGrupos({})
+    setTotaisManuais({})
+    setMarcasGrupo({})
 
     if (ok > 0) {
-      const msg = criados > 0 ? `${ok} item(ns) lançado(s)! ${criados} produto(s) criado(s) automaticamente.` : `${ok} item(ns) lançado(s) no estoque!`
-      toast.success(msg)
+      toast.success(criados > 0
+        ? `${ok} lançamento(s)! ${criados} produto(s) criado(s) automaticamente.`
+        : `${ok} lançamento(s) no estoque!`)
     }
-    if (erros > 0) toast.error(`${erros} item(ns) não puderam ser lançados (sem vínculo)`)
-    if (pulados > 0) toast(`${pulados} item(ns) em branco foram retirados da fila`, { icon: '⬜' })
+    if (erros > 0) toast.error(`${erros} grupo(s) não puderam ser lançados`)
   }
 
-  const totalProntas = fila.filter(f => f.status === 'pronto').length
-  const totalItensAtivos = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo).length, 0)
-  const totalEmBranco = fila.filter(f => f.status === 'pronto').reduce((s, f) => s + f.itens.filter(i => i.ativo && itemIncompleto(i)).length, 0)
+  const aguardando = fila.filter(f => f.status === 'aguardando')
+  const fotosErro = fila.filter(f => f.status === 'erro')
+  const analisando = fila.some(f => f.status === 'analisando')
+  const emRevisao = fotosProntas.length > 0
+  const totalLinhas = grupos.reduce((s, g) => s + g.linhas.length, 0)
 
-  return (
-    <div className="space-y-4 max-w-lg mx-auto">
-      <h1 className="text-2xl font-bold text-gray-800">Importar por Foto</h1>
+  // Render de um grupo (função chamada, não componente, p/ não perder foco dos inputs)
+  function renderGrupo(g) {
+    const unidade = unidadeGrupo(g)
+    const produto = g.tipo === 'produto' ? produtos.find(p => p.id === g.produtoId) : null
+    const ficha = g.tipo === 'ficha' ? fichas.find(f => f.id === g.fichaId) : null
+    const pulado = !!pularGrupos[g.chave]
+    const confirmado = !!confirmGrupos[g.chave]
+    const linhasCalc = g.linhas.map(l => ({ l, ...calcLinha(g, l.item, unidade) }))
+    const precisaAlgo = linhasCalc.some(x => x.precisaPeso)
+    const auto = round3(linhasCalc.reduce((s, x) => s + (x.total || 0), 0))
+    const totalDisplay = totaisManuais[g.chave] != null ? totaisManuais[g.chave] : String(auto)
 
-      {editandoChave ? (
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-          <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Groq (gratuita)</p>
-          <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">console.groq.com</span></p>
-          <input className="input" placeholder="gsk_..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
-          <button onClick={salvarChave} className="btn-primary w-full">Salvar Chave</button>
-        </div>
-      ) : (
-        <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
-          <p className="text-sm text-green-700 font-medium">✅ API Groq configurada</p>
-          <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
-        </div>
-      )}
+    const cor = pulado ? 'border-gray-200 bg-gray-50 opacity-60'
+      : confirmado ? 'border-green-400 bg-green-50'
+        : g.tipo === 'sem' ? 'border-red-200 bg-red-50'
+          : g.tipo === 'novo' ? 'border-blue-200 bg-blue-50'
+            : precisaAlgo ? 'border-yellow-300 bg-yellow-50'
+              : 'border-gray-200 bg-white'
 
-      <div className="space-y-2">
-        <p className="text-sm font-medium text-gray-700">Finalidade das fotos</p>
-        <div className="grid grid-cols-1 gap-2">
-          {TIPOS_FOTO.map(t => (
-            <button
-              key={t.value}
-              onClick={() => setTipoLote(t.value)}
-              className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
-                tipoLote === t.value
-                  ? 'border-red-700 bg-red-50 text-red-800'
-                  : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <p className="text-xs text-gray-400">Vale para todas as fotos da fila. Para tipos diferentes, faça em lotes separados.</p>
-      </div>
-
-      <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
-        <p className="text-4xl">📷</p>
-        <p className="text-sm text-gray-500">Selecione uma ou várias fotos de uma vez</p>
-        <div className="flex gap-2 justify-center flex-wrap">
-          <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📁 Escolher arquivos</button>
-          <button onClick={() => cameraRef.current.click()} className="btn-secondary text-sm">📷 Tirar foto</button>
-        </div>
-        <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
-        <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
-      </div>
-
-      {fila.length > 0 && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium text-gray-600">{fila.length} foto(s) na fila</p>
-            <button
-              onClick={analisarTodas}
-              disabled={!fila.some(f => f.status === 'aguardando') || !apiKey}
-              className="btn-primary text-sm disabled:opacity-50"
-            >
-              🔍 Analisar {fila.filter(f => f.status === 'aguardando').length > 0 ? `(${fila.filter(f => f.status === 'aguardando').length})` : ''}
+    return (
+      <div key={g.chave} className={`border rounded-xl p-4 space-y-3 ${cor}`}>
+        {/* Cabeçalho */}
+        <div className="flex items-start gap-2">
+          <div className="flex-1 min-w-0">
+            {g.tipo === 'novo' ? (
+              <>
+                <label className="label">Criar produto novo</label>
+                <input
+                  className="input text-sm font-medium"
+                  value={g.linhas[0].item.nomeBase || ''}
+                  onChange={e => editarNomeNovo(g, e.target.value)}
+                  placeholder="Nome do produto"
+                />
+              </>
+            ) : (
+              <p className="font-semibold text-gray-800 leading-tight break-words">
+                {produto?.nome || ficha?.nome || g.linhas[0].item.nome}
+              </p>
+            )}
+            <button onClick={() => abrirPickerGrupo(g)} className="text-xs text-red-700 underline mt-0.5">
+              {(produto || ficha) ? 'trocar produto' : 'vincular a existente'}
             </button>
           </div>
+          <span className="text-xs text-gray-400 shrink-0">{unidade}</span>
+        </div>
 
-          {fila.map(foto => (
-            <div key={foto.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-              <div className="flex items-center gap-3 p-3 border-b border-gray-100">
-                <img src={foto.url} alt="" className="w-14 h-14 object-cover rounded-lg shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-700 truncate">{foto.file.name}</p>
-                  <div className="mt-1">
-                    {foto.status === 'aguardando' && <Badge color="gray">Aguardando análise</Badge>}
-                    {foto.status === 'analisando' && (
-                      <span className="flex items-center gap-1 text-xs text-blue-600">
-                        <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                        </svg>
-                        Analisando...
-                      </span>
-                    )}
-                    {foto.status === 'pronto' && <Badge color={tipoCor[foto.resultado.tipo]}>{tipoLabel[foto.resultado.tipo]}</Badge>}
-                    {foto.status === 'erro' && <Badge color="red">Erro na análise</Badge>}
+        {/* Linhas (procedência) */}
+        <div className="space-y-1.5 pl-1">
+          {linhasCalc.map(({ l, converter, precisaPeso, total }) => (
+            <div key={`${l.foto.id}-${l.idx}`} className="flex items-start gap-2">
+              <div className="flex-1 min-w-0 space-y-1">
+                <span className="text-xs text-gray-500 block truncate">{l.item.nome}</span>
+                {converter ? (
+                  <div className="flex items-end gap-1 flex-wrap text-xs">
+                    <input type="number" min="0" step="1" className="input text-xs px-1 w-12" value={l.item.quantidade}
+                      onChange={e => editarLinha(l, 'quantidade', parseFloat(e.target.value) || 0, g.chave)} />
+                    <span className="pb-2 text-gray-400">×</span>
+                    <input type="number" min="0" step="0.001" className="input text-xs px-1 w-14" placeholder="?" value={l.item.pesoEmbalagem}
+                      onChange={e => editarLinha(l, 'pesoEmbalagem', e.target.value, g.chave)} />
+                    <select className="input text-xs px-0.5 w-12" value={l.item.unidadeEmbalagem}
+                      onChange={e => editarLinha(l, 'unidadeEmbalagem', e.target.value, g.chave)}>
+                      {UNIDADES_PESO.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                    <span className="pb-2 text-gray-400">=</span>
+                    <span className="pb-2 font-semibold text-gray-700">
+                      {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${unidade}`}
+                    </span>
                   </div>
-                </div>
-                <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
+                ) : (
+                  <div className="flex items-center gap-1 text-xs">
+                    <input type="number" min="0" step="0.001" className="input text-xs px-1 w-20" value={l.item.quantidade}
+                      onChange={e => editarLinha(l, 'quantidade', parseFloat(e.target.value) || 0, g.chave)} />
+                    <span className="text-gray-400">{unidade}</span>
+                  </div>
+                )}
               </div>
-
-              {foto.status === 'erro' && (
-                <p className="text-xs text-red-600 p-3">{foto.erro}</p>
-              )}
-
-              {foto.status === 'pronto' && (
-                <div className="p-3 space-y-2">
-                  <p className="text-xs text-gray-500">{foto.resultado.descricao}</p>
-                  {foto.resultado.observacao && (
-                    <p className="text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">⚠️ {foto.resultado.observacao}</p>
-                  )}
-                  <div className="space-y-2">
-                    {foto.itens.map((item, i) => {
-                      const produtoVinculado = produtos.find(p => p.id === item.produtoId)
-                      const fichaVinculada = fichas.find(f => f.id === item.fichaId)
-                      const vinculo = fichaVinculada || produtoVinculado
-                      // Unidade-alvo: do produto vinculado, ou (produto novo) a base do peso lido.
-                      const unidadeAlvo = unidadeAlvoDoItem(item, produtoVinculado)
-                      const ehNovoEntrada = !vinculo && foto.resultado.tipo === 'entrada'
-                      const r = (!fichaVinculada && foto.resultado.tipo !== 'saida_ficha')
-                        ? calcular(item, unidadeAlvo)
-                        : { converter: false, precisaPeso: false, total: null }
-                      const usaPeso = r.converter
-                      const precisaPeso = r.precisaPeso
-                      const total = r.total
-                      return (
-                        <div key={i} className={`border rounded-lg p-2 space-y-2 ${!item.ativo ? 'border-gray-100 opacity-50' : precisaPeso ? 'border-yellow-300 bg-yellow-50' : 'border-gray-200'}`}>
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="checkbox" checked={item.ativo}
-                              onChange={e => atualizarItem(foto.id, i, 'ativo', e.target.checked)}
-                              className="w-4 h-4 accent-red-600 shrink-0"
-                            />
-                            <span className="text-sm font-medium text-gray-800 truncate">{item.nome}</span>
-                            {!vinculo && <Badge color="red">Sem vínculo</Badge>}
-                          </div>
-                          {usaPeso ? (
-                            <div className="ml-6 space-y-2">
-                              <div className="flex items-end gap-1.5 flex-wrap">
-                                <div className="w-16">
-                                  <label className="label">Qtd</label>
-                                  <input
-                                    type="number" min="0" step="1"
-                                    className="input text-sm px-2"
-                                    value={item.quantidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <span className="pb-2 text-gray-400 text-sm">×</span>
-                                <div className="w-20">
-                                  <label className="label">Peso/un</label>
-                                  <input
-                                    type="number" min="0" step="0.001"
-                                    className="input text-sm px-2"
-                                    placeholder="?"
-                                    value={item.pesoEmbalagem}
-                                    onChange={e => atualizarItem(foto.id, i, 'pesoEmbalagem', e.target.value)}
-                                  />
-                                </div>
-                                <div className="w-16">
-                                  <label className="label">Un</label>
-                                  <select
-                                    className="input text-sm px-1"
-                                    value={item.unidadeEmbalagem}
-                                    onChange={e => atualizarItem(foto.id, i, 'unidadeEmbalagem', e.target.value)}
-                                  >
-                                    {UNIDADES_PESO.map(u => <option key={u} value={u}>{u}</option>)}
-                                  </select>
-                                </div>
-                                <span className="pb-2 text-gray-400 text-sm">=</span>
-                                <div className="pb-2 text-sm font-semibold text-gray-700">
-                                  {precisaPeso ? <span className="text-yellow-700">informe o peso</span> : `${total} ${unidadeAlvo}`}
-                                </div>
-                              </div>
-                              <div>
-                                <label className="label">Produto</label>
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              </div>
-                            </div>
-                          ) : ehNovoEntrada ? (
-                            <div className="ml-6 space-y-2">
-                              <div className="grid grid-cols-2 gap-2">
-                                <div>
-                                  <label className="label">Quantidade</label>
-                                  <input
-                                    type="number" min="0.001" step="0.001"
-                                    className="input text-sm"
-                                    value={item.quantidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                                  />
-                                </div>
-                                <div>
-                                  <label className="label">Unidade</label>
-                                  <select
-                                    className="input text-sm"
-                                    value={item.unidade}
-                                    onChange={e => atualizarItem(foto.id, i, 'unidade', e.target.value)}
-                                  >
-                                    {UNIDADES_NOVO.map(u => <option key={u} value={u}>{ROTULO_UNIDADE[u] || u}</option>)}
-                                  </select>
-                                </div>
-                              </div>
-                              <div>
-                                <label className="label">Vincular a produto existente (opcional)</label>
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- criar novo produto --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              </div>
-                            </div>
-                          ) : (
-                          <div className="grid grid-cols-2 gap-2 ml-6">
-                            <div>
-                              <label className="label">Quantidade</label>
-                              <input
-                                type="number" min="0.001" step="0.001"
-                                className="input text-sm"
-                                value={item.quantidade}
-                                onChange={e => atualizarItem(foto.id, i, 'quantidade', parseFloat(e.target.value) || 0)}
-                              />
-                            </div>
-                            <div>
-                              <label className="label">Produto/Ficha</label>
-                              {foto.resultado.tipo === 'saida_ficha' ? (
-                                <select
-                                  className="input text-sm"
-                                  value={item.fichaId ?? item.produtoId ?? ''}
-                                  onChange={e => {
-                                    const val = parseInt(e.target.value)
-                                    const isFicha = fichas.some(f => f.id === val)
-                                    atualizarItem(foto.id, i, 'fichaId', isFicha ? val : null)
-                                    atualizarItem(foto.id, i, 'produtoId', isFicha ? null : val)
-                                  }}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  <optgroup label="Fichas">{fichas.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}</optgroup>
-                                  <optgroup label="Produtos">{produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}</optgroup>
-                                </select>
-                              ) : (
-                                <select
-                                  className="input text-sm"
-                                  value={item.produtoId ?? ''}
-                                  onChange={e => atualizarItem(foto.id, i, 'produtoId', parseInt(e.target.value) || null)}
-                                >
-                                  <option value="">-- não vincular --</option>
-                                  {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-                                </select>
-                              )}
-                            </div>
-                          </div>
-                          )}
-                          {foto.resultado.tipo === 'entrada' && (
-                            <div className="ml-6">
-                              <label className="label">Marca (opcional)</label>
-                              <input
-                                className="input text-sm"
-                                placeholder="Ex: Tio João"
-                                value={item.marca || ''}
-                                onChange={e => atualizarItem(foto.id, i, 'marca', e.target.value)}
-                              />
-                            </div>
-                          )}
-                          {ehNovoEntrada && (
-                            <div className="ml-6">
-                              <label className="label">Criar como (itens com o mesmo nome são unidos)</label>
-                              <input
-                                className="input text-sm"
-                                placeholder="Ex: Queijo Mussarela"
-                                value={item.nomeBase || ''}
-                                onChange={e => atualizarItem(foto.id, i, 'nomeBase', e.target.value)}
-                              />
-                              {(() => {
-                                const n = contarNoGrupo(normalizar(item.nomeBase || item.nome))
-                                return n > 1
-                                  ? <p className="text-xs text-blue-600 mt-1">🔗 será unido com {n - 1} outro(s) item(ns) deste tipo</p>
-                                  : <p className="text-xs text-gray-400 mt-1">novo produto</p>
-                              })()}
-                            </div>
-                          )}
-                          {vinculo && <p className="ml-6 text-xs text-green-600">✓ {vinculo.nome}</p>}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
+              {g.linhas.length > 1 && (
+                <button onClick={() => desagrupar(l)} className="text-gray-300 hover:text-red-500 shrink-0 mt-0.5" aria-label="Desagrupar">
+                  <X className="w-3.5 h-3.5" />
+                </button>
               )}
             </div>
           ))}
-
-          {totalProntas > 0 && (
-            <button
-              onClick={() => { setIncluirBranco(false); setModalLancar(true) }}
-              disabled={confirmando || totalItensAtivos === 0}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {confirmando ? 'Lançando...' : `✅ Confirmar e Lançar ${totalItensAtivos} item(ns) de ${totalProntas} foto(s)`}
-            </button>
-          )}
         </div>
+
+        {/* Total */}
+        <div className="flex items-center gap-2 pl-1 pt-1 border-t border-black/10">
+          <label className="text-sm text-gray-600">Total:</label>
+          <input type="number" min="0" step="0.001" inputMode="decimal"
+            value={totalDisplay}
+            onChange={e => editarTotal(g.chave, e.target.value)}
+            className="input w-28 text-base font-semibold text-right" />
+          <span className="text-sm text-gray-400">{unidade}</span>
+        </div>
+
+        {/* Marca (entrada) */}
+        {g.tipoFoto === 'entrada' && (
+          <div className="pl-1">
+            <label className="label">Marca (opcional)</label>
+            <input className="input text-sm" placeholder="Ex: Tio João" value={marcasGrupo[g.chave] || ''}
+              onChange={e => setMarcasGrupo(prev => ({ ...prev, [g.chave]: e.target.value }))} />
+          </div>
+        )}
+
+        {/* Ações */}
+        <div className="flex gap-2 pt-1">
+          <button onClick={() => togglePular(g.chave)} className="btn-secondary flex-1 text-sm">
+            {pulado ? 'Incluir' : 'Pular'}
+          </button>
+          <button onClick={() => confirmarGrupo(g.chave)} disabled={pulado}
+            className={`flex-1 text-sm font-semibold px-4 py-2 rounded-lg transition-colors disabled:opacity-50 ${
+              confirmado ? 'bg-green-600 text-white' : 'bg-red-800 hover:bg-red-900 text-white'
+            }`}>
+            {confirmado ? '✓ Confirmado' : 'Confirmar'}
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4 max-w-lg mx-auto pb-28">
+      <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
+      <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
+
+      {/* ----------------------------- TELA INICIAL ----------------------------- */}
+      {!emRevisao && (
+        <>
+          <h1 className="text-2xl font-bold text-gray-800">Lançar com IA</h1>
+
+          {editandoChave ? (
+            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+              <p className="text-sm font-medium text-blue-800">🔑 Configure sua chave Groq (gratuita)</p>
+              <p className="text-xs text-blue-600">Obtenha em: <span className="font-mono">console.groq.com</span></p>
+              <input className="input" placeholder="gsk_..." value={chaveTemp} onChange={e => setChaveTemp(e.target.value)} />
+              <button onClick={salvarChave} className="btn-primary w-full">Salvar Chave</button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between bg-green-50 border border-green-200 rounded-xl px-4 py-3">
+              <p className="text-sm text-green-700 font-medium">✅ IA configurada</p>
+              <button onClick={() => { setChaveTemp(apiKey); setEditandoChave(true) }} className="text-xs text-green-600 underline">Alterar</button>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-gray-700">Finalidade das fotos</p>
+            <div className="grid grid-cols-1 gap-2">
+              {TIPOS_FOTO.map(t => (
+                <button
+                  key={t.value}
+                  onClick={() => setTipoLote(t.value)}
+                  className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
+                    tipoLote === t.value
+                      ? 'border-red-700 bg-red-50 text-red-800'
+                      : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400">Vale para todas as fotos da fila. Para tipos diferentes, faça em lotes separados.</p>
+          </div>
+
+          {analisando ? (
+            <div className="bg-white border border-gray-200 rounded-xl p-8 text-center space-y-3">
+              <svg className="animate-spin h-8 w-8 mx-auto text-red-700" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              <p className="text-sm text-gray-600">Analisando foto(s)...</p>
+            </div>
+          ) : (
+            <>
+              <div className="bg-white border-2 border-dashed border-gray-300 rounded-xl p-6 text-center space-y-3">
+                <p className="text-4xl">📷</p>
+                <p className="text-sm text-gray-500">Selecione uma ou várias fotos de uma vez</p>
+                <div className="flex gap-2 justify-center flex-wrap">
+                  <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📁 Escolher arquivos</button>
+                  <button onClick={() => cameraRef.current.click()} className="btn-secondary text-sm">📷 Tirar foto</button>
+                </div>
+              </div>
+
+              {aguardando.length > 0 && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm font-medium text-gray-600">{aguardando.length} foto(s) na fila</p>
+                    <button onClick={analisarTodas} disabled={!apiKey} className="btn-primary text-sm disabled:opacity-50">
+                      🔍 Analisar ({aguardando.length})
+                    </button>
+                  </div>
+                  {aguardando.map(foto => (
+                    <div key={foto.id} className="flex items-center gap-3 bg-white border border-gray-200 rounded-xl p-2">
+                      <img src={foto.url} alt="" className="w-12 h-12 object-cover rounded-lg shrink-0" />
+                      <p className="flex-1 min-w-0 text-sm text-gray-700 truncate">{foto.file.name}</p>
+                      <button onClick={() => removerFoto(foto.id)} className="text-gray-300 hover:text-red-500 text-lg shrink-0">✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {fotosErro.map(foto => (
+                <p key={foto.id} className="text-xs text-red-600">
+                  Erro ao ler {foto.file.name}: {foto.erro}{' '}
+                  <button onClick={() => removerFoto(foto.id)} className="underline">remover</button>
+                </p>
+              ))}
+            </>
+          )}
+        </>
       )}
 
-      {modalLancar && (
-        <Modal title="Confirmar lançamento" onClose={() => setModalLancar(false)}>
-          <div className="space-y-4">
-            {totalEmBranco > 0 ? (
-              <>
-                <div className="flex gap-2 bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                  <span className="text-yellow-600">⬜</span>
-                  <p className="text-sm text-yellow-800">
-                    <strong>{totalEmBranco} item(ns) estão em branco</strong> (sem quantidade ou sem peso).
-                    {incluirBranco
-                      ? ' Eles TAMBÉM serão lançados.'
-                      : ' Ao prosseguir, eles NÃO serão lançados e sairão da fila.'}
-                  </p>
-                </div>
-                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={incluirBranco}
-                    onChange={e => setIncluirBranco(e.target.checked)}
-                    className="w-4 h-4 accent-red-700"
-                  />
-                  Também lançar itens em branco?
-                </label>
-              </>
-            ) : (
-              <p className="text-sm text-gray-700">Confirmar o lançamento de <strong>{totalItensAtivos} item(ns)</strong>?</p>
-            )}
+      {/* ------------------------------- REVISÃO ------------------------------- */}
+      {emRevisao && (
+        <>
+          <div className="flex items-center justify-between">
+            <h1 className="text-xl font-bold text-gray-800">Revisar — {tipoLabel[tipoLote]}</h1>
+            <button onClick={() => setFila([])} className="text-sm text-gray-500 underline">Limpar</button>
+          </div>
 
-            <div className="flex gap-2 pt-1">
-              <button onClick={() => setModalLancar(false)} className="btn-secondary flex-1">Voltar</button>
+          <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+            <p className="text-sm text-gray-600">
+              <strong>{grupos.length}</strong> produto(s) · {totalLinhas} item(ns) lidos.
+              Confira e toque em <strong>Confirmar</strong> em cada um.
+            </p>
+            <button onClick={() => fileRef.current.click()} className="text-sm text-red-700 underline">+ Adicionar outra foto</button>
+            {aguardando.length > 0 && (
+              <button onClick={analisarTodas} className="btn-secondary w-full text-sm">🔍 Analisar {aguardando.length} nova(s)</button>
+            )}
+          </div>
+
+          {grupos.map(g => renderGrupo(g))}
+
+          <div className="fixed bottom-16 left-0 right-0 p-3 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent">
+            <div className="max-w-lg mx-auto">
               <button
-                onClick={() => { setModalLancar(false); confirmarTodos(incluirBranco) }}
-                className="btn-primary flex-1"
+                onClick={lancarConfirmados}
+                disabled={confirmando || gruposConfirmados.length === 0}
+                className="btn-primary w-full text-base py-3 disabled:opacity-50 shadow-lg"
               >
-                Prosseguir
+                {confirmando ? 'Lançando...' : `Lançar ${gruposConfirmados.length} produto(s)`}
               </button>
             </div>
           </div>
-        </Modal>
+        </>
       )}
+
+      {/* Seletor de vínculo (busca) */}
+      {picker && (picker.tipoFoto === 'saida_ficha' ? (
+        <SeletorProduto
+          titulo="Vincular a ficha ou produto"
+          produtos={[
+            ...fichas.map(f => ({ id: `f-${f.id}`, nome: `🍕 ${f.nome}`, unidade: 'ficha', _ficha: f })),
+            ...produtos.map(p => ({ id: `p-${p.id}`, nome: p.nome, unidade: p.unidade, _produto: p })),
+          ]}
+          onEscolher={c => c._ficha ? vincularFichaPicker(c._ficha) : vincularProdutoPicker(c._produto)}
+          onClose={() => setPicker(null)}
+        />
+      ) : (
+        <SeletorProduto
+          titulo="Vincular a produto"
+          produtos={produtos}
+          descricao={p => `${p.quantidade} ${p.unidade}`}
+          onEscolher={vincularProdutoPicker}
+          onClose={() => setPicker(null)}
+          opcaoExtra={picker.tipoFoto === 'entrada' ? { label: '+ Criar produto novo (não vincular)', onEscolher: criarNovoPicker } : undefined}
+        />
+      ))}
     </div>
   )
 }

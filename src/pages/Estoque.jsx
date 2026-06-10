@@ -7,13 +7,13 @@ import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
 import { lerXlsx, matchearPrecos, normalizarPreco, mediaPrecos, criarGrupoNovo } from '../lib/precos'
-import { agruparPorTipo } from '../services/geminiVision'
+import { agruparPorTipo, categorizarProdutos } from '../services/geminiVision'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import { Search, ArrowLeftRight, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const CATEGORIAS = ['Massa', 'Molho', 'Queijo', 'Embutido', 'Vegetal', 'Tempero', 'Bebida', 'Embalagem', 'Outros']
+const CATEGORIAS = ['Laticínios e Frios', 'Proteínas', 'Hortifruti', 'Mercearia', 'Produções Internas', 'Bebidas', 'Embalagens e Etiquetas', 'Limpeza', 'Porcionados', 'Outros']
 const UNIDADES = ['kg', 'g', 'L', 'ml', 'un', 'cx', 'pct', 'fardo']
 const VAZIO = { nome: '', categoria: 'Outros', unidade: 'kg', quantidade: 0, estoque_minimo: 0, preco: 0 }
 
@@ -39,6 +39,12 @@ export function Estoque() {
   const [buscaGrupo, setBuscaGrupo] = useState('')
   const [precoFiltro, setPrecoFiltro] = useState('todos') // todos | pendentes | confirmados
   const [precoBusca, setPrecoBusca] = useState('')
+
+  // --- Categorização por IA ---
+  const [catFase, setCatFase] = useState('idle') // idle | lendo | confirmando | aplicando
+  const [catItens, setCatItens] = useState([]) // { id, nome, atual, nova }
+  const [catFiltro, setCatFiltro] = useState('mudancas') // mudancas | todos
+  const [catBusca, setCatBusca] = useState('')
 
   const filtrados = produtos.filter(p => {
     const okBusca = p.nome.toLowerCase().includes(busca.toLowerCase())
@@ -339,6 +345,78 @@ export function Estoque() {
     fecharPrecos()
   }
 
+  // ---------------------------------------------------------------------------
+  // Categorização por IA
+  // ---------------------------------------------------------------------------
+  async function organizarCategorias() {
+    const apiKey = localStorage.getItem('gemini_api_key') || ''
+    if (!apiKey) return toast.error('Configure a chave da IA na aba "Lançar com IA" primeiro')
+    if (produtos.length === 0) return toast.error('Nenhum produto no estoque')
+    setCatFase('lendo')
+    const t = toast.loading('Classificando produtos...')
+    try {
+      const mapa = await categorizarProdutos(
+        produtos.map(p => p.nome), CATEGORIAS, apiKey,
+        (i, n) => toast.loading(`Classificando... (lote ${i}/${n})`, { id: t })
+      )
+      const itens = produtos.map(p => {
+        const atual = p.categoria || 'Outros'
+        let nova
+        // Regras fixas (não dependem do palpite da IA pelo nome):
+        // - "Produção" (antiga) / "Produções Internas" → Produções Internas.
+        // - "Vegetal" (antiga) → Hortifruti.
+        if (atual === 'Produção' || atual === 'Produções Internas') {
+          nova = 'Produções Internas'
+        } else if (atual === 'Vegetal') {
+          nova = 'Hortifruti'
+        } else {
+          const sug = mapa[p.nome.trim()]
+          nova = (sug && CATEGORIAS.includes(sug)) ? sug : atual
+        }
+        return { id: p.id, nome: p.nome, atual, nova }
+      })
+      setCatItens(itens)
+      setCatFase('confirmando')
+      toast.dismiss(t)
+      const mudancas = itens.filter(x => x.nova !== x.atual).length
+      toast.success(`${mudancas} mudança(s) sugerida(s). Revise antes de salvar.`)
+    } catch (err) {
+      toast.dismiss(t)
+      toast.error('Falha ao classificar: ' + (err?.message || 'erro'), { duration: 6000 })
+      setCatFase('idle')
+    }
+  }
+
+  function editarCatItem(id, nova) {
+    setCatItens(prev => prev.map(x => x.id === id ? { ...x, nova } : x))
+  }
+  function fecharCat() {
+    setCatItens([])
+    setCatFase('idle')
+    setCatFiltro('mudancas')
+    setCatBusca('')
+  }
+  async function aplicarCategorias() {
+    const mudancas = catItens.filter(x => x.nova !== x.atual)
+    if (mudancas.length === 0) { fecharCat(); return }
+    setCatFase('aplicando')
+    let ok = 0, erros = 0
+    for (const m of mudancas) {
+      const { error } = await supabase.from('produtos').update({ categoria: m.nova }).eq('id', m.id)
+      if (error) erros++; else ok++
+    }
+    if (ok > 0) toast.success(`${ok} categoria(s) atualizada(s)!`)
+    if (erros > 0) toast.error(`${erros} não puderam ser atualizadas`)
+    fecharCat()
+  }
+
+  const catMudancas = catItens.filter(x => x.nova !== x.atual)
+  const catFiltrados = catItens.filter(x => {
+    if (catFiltro === 'mudancas' && x.nova === x.atual) return false
+    if (catBusca && !x.nome.toLowerCase().includes(catBusca.toLowerCase())) return false
+    return true
+  })
+
   const gruposVisiveis    = gruposPreco.filter(g => !g.pulado)
   const gruposComProduto  = gruposVisiveis.filter(g => g.tipo === 'match')
   const gruposNovos       = gruposVisiveis.filter(g => g.tipo === 'novo')
@@ -362,6 +440,90 @@ export function Estoque() {
   }
   const matchFiltrados = gruposComProduto.filter(passaFiltroPreco)
   const novosFiltrados = gruposNovos.filter(passaFiltroPreco)
+
+  // ---------------------------------------------------------------------------
+  // TELA DE REVISÃO DE CATEGORIAS (IA)
+  // ---------------------------------------------------------------------------
+  if (catFase === 'confirmando' || catFase === 'aplicando') {
+    return (
+      <div className="space-y-4 max-w-lg mx-auto pb-28">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl font-bold text-gray-800">Organizar categorias</h1>
+          <button onClick={fecharCat} className="text-sm text-gray-500 underline">Cancelar</button>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
+          <p className="text-sm text-gray-600">
+            A IA sugeriu <strong>{catMudancas.length}</strong> mudança(s) de categoria em {catItens.length} produto(s).
+            Ajuste o que quiser e salve.
+          </p>
+          <div className="flex gap-2">
+            {[
+              { v: 'mudancas', label: `Só mudanças (${catMudancas.length})` },
+              { v: 'todos', label: `Todos (${catItens.length})` },
+            ].map(f => (
+              <button
+                key={f.v}
+                onClick={() => setCatFiltro(f.v)}
+                className={`flex-1 text-xs font-medium px-2 py-2 rounded-lg border transition-colors ${
+                  catFiltro === f.v ? 'bg-red-50 border-red-200 text-red-700' : 'bg-white border-gray-200 text-gray-600'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              placeholder="Buscar produto..."
+              value={catBusca}
+              onChange={e => setCatBusca(e.target.value)}
+              className="input pl-9"
+            />
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden">
+          {catFiltrados.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-8">Nenhum produto neste filtro.</p>
+          ) : catFiltrados.map(x => {
+            const mudou = x.nova !== x.atual
+            return (
+              <div key={x.id} className={`flex items-center gap-2 p-3 ${mudou ? 'bg-yellow-50/50' : ''}`}>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-800 truncate">{x.nome}</p>
+                  <p className="text-xs text-gray-400">
+                    {x.atual}{mudou && <span className="text-yellow-700"> → mudará</span>}
+                  </p>
+                </div>
+                <select
+                  value={x.nova}
+                  onChange={e => editarCatItem(x.id, e.target.value)}
+                  className={`input w-40 text-sm ${mudou ? 'border-yellow-300' : ''}`}
+                >
+                  {!CATEGORIAS.includes(x.nova) && <option value={x.nova}>{x.nova}</option>}
+                  {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="fixed bottom-16 left-0 right-0 p-3 bg-gradient-to-t from-gray-50 via-gray-50 to-transparent">
+          <div className="max-w-lg mx-auto">
+            <button
+              onClick={aplicarCategorias}
+              disabled={catFase === 'aplicando' || catMudancas.length === 0}
+              className="btn-primary w-full text-base py-3 disabled:opacity-50 shadow-lg"
+            >
+              {catFase === 'aplicando' ? 'Salvando...' : `Salvar ${catMudancas.length} mudança(s)`}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   // ---------------------------------------------------------------------------
   // TELA DE CONFIRMAÇÃO DE PREÇOS
@@ -592,6 +754,13 @@ export function Estoque() {
           >
             💰 {precoFase === 'lendo' ? 'Lendo...' : 'Importar Preços'}
           </button>
+          <button
+            onClick={organizarCategorias}
+            disabled={catFase === 'lendo'}
+            className="btn-secondary text-sm disabled:opacity-50"
+          >
+            🏷️ {catFase === 'lendo' ? 'Classificando...' : 'Categorias IA'}
+          </button>
           <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📥 Importar CSV</button>
           <button onClick={() => exportarEstoqueCSV(filtrados)} className="btn-secondary text-sm">📤 CSV</button>
           <button onClick={() => exportarEstoquePDF(filtrados)} className="btn-secondary text-sm">📄 PDF</button>
@@ -683,6 +852,10 @@ export function Estoque() {
               <div>
                 <label className="label">Categoria</label>
                 <select className="input" value={form.categoria} onChange={e => setForm(f => ({ ...f, categoria: e.target.value }))}>
+                  {/* Preserva a categoria antiga do produto se não estiver na lista nova */}
+                  {form.categoria && !CATEGORIAS.includes(form.categoria) && (
+                    <option value={form.categoria}>{form.categoria} (antiga)</option>
+                  )}
                   {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
                 </select>
               </div>

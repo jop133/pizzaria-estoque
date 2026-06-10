@@ -1,8 +1,7 @@
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { useProdutos, useFichas } from '../hooks/useEstoque'
 import { registrarSaidaFicha, registrarSaidaManual, registrarEntrada } from '../services/estoque'
-import { analisarImagemEstoque, prepararImagem } from '../services/geminiVision'
-import { expandirArquivosParaImagens } from '../lib/arquivos'
+import { SeletorProduto } from '../components/SeletorProduto'
 import toast from 'react-hot-toast'
 
 const TIPOS = [
@@ -19,95 +18,30 @@ export function Lancamentos() {
   const [tipo, setTipo] = useState('saida_ficha')
   const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
   const [loading, setLoading] = useState(false)
-  const [analisandoFoto, setAnalisandoFoto] = useState(false)
-  const [previewFoto, setPreviewFoto] = useState(null)
-  const fileRef = useRef()
-  const cameraRef = useRef()
+  const [pickerAberto, setPickerAberto] = useState(false)
 
-  const apiKey = localStorage.getItem('gemini_api_key') || ''
-
-  async function selecionarFoto(e) {
-    const original = e.target.files[0]
-    e.target.value = ''
-    if (!original) return
-    if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
-
-    let file = original
-    if (original.type === 'application/pdf' || /\.pdf$/i.test(original.name)) {
-      const t = toast.loading('Lendo arquivo...')
-      try {
-        const imgs = await expandirArquivosParaImagens([original], true)
-        file = imgs[0]
-      } catch {
-        toast.error('Não foi possível ler o PDF.')
-        return
-      } finally {
-        toast.dismiss(t)
-      }
-      if (!file) return
-    }
-
-    setPreviewFoto(URL.createObjectURL(file))
-    setAnalisandoFoto(true)
-    try {
-      const { base64, mimeType } = await prepararImagem(file)
-      const res = await analisarImagemEstoque(base64, mimeType, produtos, fichas, apiKey)
-
-      // Selecionar tipo baseado no resultado da IA
-      if (res.tipo && res.tipo !== 'desconhecido') setTipo(res.tipo)
-
-      // Preencher o primeiro item identificado
-      const item = res.itens?.[0]
-      if (item) {
-        const qtd = item.quantidade || ''
-        const busca = (item.nomeCadastrado || item.nome || '').toLowerCase()
-
-        if (res.tipo === 'saida_ficha') {
-          const ficha = fichas.find(f => f.nome.toLowerCase() === busca)
-            || fichas.find(f => f.nome.toLowerCase().includes(busca) || busca.includes(f.nome.toLowerCase()))
-          setForm(f => ({ ...f, quantidade: String(qtd), fichaId: ficha ? String(ficha.id) : '' }))
-          if (!ficha && item.nome) toast(`Ficha "${item.nome}" não encontrada — selecione manualmente`, { icon: '⚠️' })
-        } else {
-          const prod = produtos.find(p => p.nome.toLowerCase() === busca)
-            || produtos.find(p => p.nome.toLowerCase().includes(busca) || busca.includes(p.nome.toLowerCase()))
-          setForm(f => ({ ...f, quantidade: String(qtd), produtoId: prod ? String(prod.id) : '', marca: item.marca || '' }))
-          if (!prod && item.nome) toast(`Produto "${item.nome}" não encontrado — selecione manualmente`, { icon: '⚠️' })
-        }
-
-        if (res.itens.length > 1) {
-          toast(`${res.itens.length} itens identificados. Use a aba 📷 Foto IA para lançar todos de uma vez.`, { icon: 'ℹ️', duration: 5000 })
-        }
-      }
-
-      toast.success(`Foto analisada: ${res.descricao || 'itens identificados'}`)
-    } catch (e) {
-      toast.error(e.message || 'Erro ao analisar foto')
-    } finally {
-      setAnalisandoFoto(false)
-    }
-  }
+  const fichaSel = fichas.find(f => f.id === parseInt(form.fichaId))
+  const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
 
   async function lancar() {
     const qtd = parseFloat(form.quantidade)
     if (!qtd || qtd <= 0) return toast.error('Quantidade deve ser maior que zero')
+    if (tipo === 'saida_ficha' && !form.fichaId) return toast.error('Selecione a ficha técnica')
+    if (tipo !== 'saida_ficha' && !form.produtoId) return toast.error('Selecione o produto')
 
     setLoading(true)
     try {
       if (tipo === 'saida_ficha') {
-        if (!form.fichaId) return toast.error('Selecione a ficha técnica')
         await registrarSaidaFicha(parseInt(form.fichaId), qtd, form.observacao)
         toast.success('Saída lançada! Estoque atualizado.')
       } else if (tipo === 'saida_manual') {
-        if (!form.produtoId) return toast.error('Selecione o produto')
         await registrarSaidaManual(parseInt(form.produtoId), qtd, form.observacao)
         toast.success('Saída manual lançada!')
       } else {
-        if (!form.produtoId) return toast.error('Selecione o produto')
         await registrarEntrada(parseInt(form.produtoId), qtd, form.observacao, form.marca)
         toast.success('Entrada registrada! Estoque atualizado.')
       }
       setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
-      setPreviewFoto(null)
     } catch (e) {
       toast.error(e.message || 'Erro ao lançar')
     } finally {
@@ -125,7 +59,7 @@ export function Lancamentos() {
         {TIPOS.map(t => (
           <button
             key={t.value}
-            onClick={() => { setTipo(t.value); setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '' }); setPreviewFoto(null) }}
+            onClick={() => { setTipo(t.value); setForm({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' }) }}
             className={`p-3 rounded-xl border-2 text-left font-medium text-sm transition-all ${
               tipo === t.value
                 ? t.color + ' border-current ring-1 ring-current opacity-100'
@@ -138,43 +72,17 @@ export function Lancamentos() {
       </div>
 
       <div className={`bg-white border-2 rounded-xl p-5 space-y-4 ${currentTipo.color}`}>
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-gray-700">{currentTipo.label}</h2>
-          <button
-            onClick={() => fileRef.current.click()}
-            disabled={analisandoFoto}
-            className="flex items-center gap-1.5 text-xs font-medium bg-white border border-gray-200 hover:bg-gray-50 px-3 py-1.5 rounded-lg disabled:opacity-50 transition-colors"
-          >
-            {analisandoFoto ? (
-              <>
-                <svg className="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
-                </svg>
-                Analisando...
-              </>
-            ) : '📷 Preencher por foto'}
-          </button>
-        </div>
-
-        <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden" onChange={selecionarFoto} />
-        <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={selecionarFoto} />
-
-        {previewFoto && (
-          <div className="flex items-center gap-3 bg-gray-50 rounded-lg p-2">
-            <img src={previewFoto} alt="" className="w-12 h-12 object-cover rounded" />
-            <p className="text-xs text-gray-500 flex-1">Foto analisada — confira e ajuste os campos abaixo</p>
-            <button onClick={() => setPreviewFoto(null)} className="text-gray-300 hover:text-gray-500">✕</button>
-          </div>
-        )}
+        <h2 className="font-semibold text-gray-700">{currentTipo.label}</h2>
 
         {tipo === 'saida_ficha' ? (
           <div>
             <label className="label">Ficha Técnica (prato/pizza)</label>
-            <select className="input" value={form.fichaId} onChange={e => setForm(f => ({ ...f, fichaId: e.target.value }))}>
-              <option value="">Selecionar ficha...</option>
-              {fichas.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
-            </select>
+            <button
+              onClick={() => setPickerAberto(true)}
+              className={`input text-left ${fichaSel ? 'text-gray-800' : 'text-gray-400'}`}
+            >
+              {fichaSel ? fichaSel.nome : 'Selecionar ficha...'}
+            </button>
             {fichas.length === 0 && (
               <p className="text-xs text-orange-600 mt-1">Crie fichas técnicas na aba correspondente primeiro.</p>
             )}
@@ -182,12 +90,12 @@ export function Lancamentos() {
         ) : (
           <div>
             <label className="label">Produto</label>
-            <select className="input" value={form.produtoId} onChange={e => setForm(f => ({ ...f, produtoId: e.target.value }))}>
-              <option value="">Selecionar produto...</option>
-              {produtos.map(p => (
-                <option key={p.id} value={p.id}>{p.nome} — {p.quantidade} {p.unidade} em estoque</option>
-              ))}
-            </select>
+            <button
+              onClick={() => setPickerAberto(true)}
+              className={`input text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
+            >
+              {produtoSel ? `${produtoSel.nome} — ${produtoSel.quantidade} ${produtoSel.unidade} em estoque` : 'Selecionar produto...'}
+            </button>
           </div>
         )}
 
@@ -230,6 +138,26 @@ export function Lancamentos() {
           {loading ? 'Processando...' : 'Confirmar Lançamento'}
         </button>
       </div>
+
+      {pickerAberto && (
+        tipo === 'saida_ficha' ? (
+          <SeletorProduto
+            titulo="Selecionar ficha"
+            produtos={fichas}
+            descricao={() => ''}
+            onEscolher={f => { setForm(x => ({ ...x, fichaId: String(f.id) })); setPickerAberto(false) }}
+            onClose={() => setPickerAberto(false)}
+          />
+        ) : (
+          <SeletorProduto
+            titulo="Selecionar produto"
+            produtos={produtos}
+            descricao={p => `${p.quantidade} ${p.unidade} em estoque`}
+            onEscolher={p => { setForm(x => ({ ...x, produtoId: String(p.id) })); setPickerAberto(false) }}
+            onClose={() => setPickerAberto(false)}
+          />
+        )
+      )}
     </div>
   )
 }

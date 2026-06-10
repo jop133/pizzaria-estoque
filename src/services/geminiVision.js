@@ -300,6 +300,87 @@ Retorne SOMENTE este JSON:
   }
 }
 
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+// Chamada de texto ao Groq com 1 retentativa em caso de rate limit (429),
+// respeitando o tempo sugerido pela API ("try again in Xs").
+async function chamarGroqTexto(prompt, apiKey, maxTokens) {
+  const body = {
+    model: MODEL_TEXTO,
+    messages: [{ role: 'user', content: prompt }],
+    max_tokens: maxTokens,
+    temperature: 0,
+    response_format: { type: 'json_object' },
+  }
+  for (let tentativa = 0; tentativa < 4; tentativa++) {
+    const res = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+      body: JSON.stringify(body),
+    })
+    if (res.status === 429) {
+      const err = await res.json().catch(() => ({}))
+      const m = (err?.error?.message || '').match(/try again in ([\d.]+)s/i)
+      const espera = m ? Math.ceil(parseFloat(m[1]) * 1000) + 800 : 15000
+      await sleep(Math.min(espera, 65000))
+      continue
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+    }
+    const data = await res.json()
+    return JSON.parse(data.choices?.[0]?.message?.content || '{}')
+  }
+  throw new Error('Limite de uso da IA atingido. Aguarde 1 minuto e tente de novo.')
+}
+
+// Classifica produtos do estoque em categorias usando o modelo de texto.
+// Lotes pequenos + saída compacta (só as categorias, na ordem) para caber no
+// limite de tokens por minuto do Groq. `onProgresso(lote, total)` é opcional.
+export async function categorizarProdutos(nomes, categorias, apiKey, onProgresso) {
+  const unicos = [...new Set((nomes || []).map(n => (n || '').trim()).filter(Boolean))]
+  const mapa = {}
+  if (unicos.length === 0) return mapa
+
+  const TAM = 50
+  const lotes = []
+  for (let i = 0; i < unicos.length; i += TAM) lotes.push(unicos.slice(i, i + TAM))
+
+  for (let l = 0; l < lotes.length; l++) {
+    if (onProgresso) onProgresso(l + 1, lotes.length)
+    const lote = lotes[l]
+    const prompt = `Classifique cada produto de estoque de uma pizzaria em UMA destas categorias EXATAS (copie igual, com acentos):
+${categorias.join(' | ')}
+
+Entenda o SIGNIFICADO (nao so a palavra). Guia:
+- Hortifruti: SO produtos frescos/in natura (frutas, legumes, verduras, ervas frescas). Ex: "Batata Branca Lavada", "Tomate", "Alface", "Cebola".
+- Mercearia: secos, enlatados, congelados e INDUSTRIALIZADOS embalados. ATENCAO: batata ja processada vai aqui — "Batata Palito", "Batata Palha" sao industrializadas = Mercearia, NAO Hortifruti. Tambem: farinha, acucar, oleo, azeite, molho de tomate, massa seca, tempero, conserva, mel, enlatado.
+- Laticinios e Frios: queijo, mussarela, catupiry, requeijao, creme de leite, manteiga, leite, iogurte, frios fatiados (presunto, mortadela).
+- Proteinas: carnes, frango, linguica, bacon, peixe, camarao, ovos, hamburguer.
+- Producoes Internas: feito na propria cozinha (massa/molho caseiro, recheio, base).
+- Bebidas: refrigerante, suco, agua, cerveja, vinho, energetico, destilado.
+- Limpeza: PRODUTOS QUIMICOS de limpeza/higiene — detergente, sabao, agua sanitaria, alcool, desinfetante, multiuso, amaciante, esponja, pano de limpeza, saco de lixo.
+- Embalagens e Etiquetas: itens DESCARTAVEIS de embalar/servir (nao quimicos) — saco plastico, bandeja, pote, copo, talher descartavel, papel toalha, guardanapo, filme plastico, papel aluminio, etiqueta, fita, marmita.
+- Porcionados: produtos ja porcionados em porcoes individuais (nome com "porcionado"/"porcao").
+- Outros: so quando realmente nao se encaixa.
+
+Produtos (responda na MESMA ORDEM, exatamente ${lote.length} itens):
+${lote.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+
+Retorne SOMENTE este JSON: {"categorias":["categoria do item 1","categoria do item 2", ...]}`
+
+    const maxTokens = Math.min(2048, lote.length * 12 + 200)
+    const parsed = await chamarGroqTexto(prompt, apiKey, maxTokens)
+    const cats = Array.isArray(parsed.categorias) ? parsed.categorias : []
+    for (let i = 0; i < lote.length && i < cats.length; i++) {
+      const c = (cats[i] || '').trim()
+      if (c) mapa[lote[i]] = c
+    }
+  }
+  return mapa
+}
+
 export function fileToBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
