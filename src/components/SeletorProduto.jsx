@@ -7,7 +7,8 @@ import { Modal } from './Modal'
 // - excluirIds: ids a ocultar (ex: insumos já adicionados).
 // - onEscolher(produto): chamado ao tocar num produto.
 // - opcaoExtra: { label, onEscolher } — botão fixo no topo (ex: "criar novo").
-export function SeletorProduto({ titulo = 'Escolher produto', produtos, excluirIds = [], onEscolher, onClose, opcaoExtra }) {
+// - descricao(produto): texto secundário à direita (padrão: a unidade).
+export function SeletorProduto({ titulo = 'Escolher produto', produtos, excluirIds = [], onEscolher, onClose, opcaoExtra, descricao }) {
   const [busca, setBusca] = useState('')
   const lista = produtos.filter(p =>
     !excluirIds.includes(p.id) &&
@@ -45,7 +46,7 @@ export function SeletorProduto({ titulo = 'Escolher produto', produtos, excluirI
               className="w-full text-left py-3 px-1 hover:bg-gray-50 transition-colors flex items-center justify-between gap-2"
             >
               <span className="text-sm font-medium text-gray-800 truncate">{p.nome}</span>
-              <span className="text-xs text-gray-400 shrink-0">{p.unidade}</span>
+              <span className="text-xs text-gray-400 shrink-0">{descricao ? descricao(p) : p.unidade}</span>
             </button>
           ))}
         </div>
