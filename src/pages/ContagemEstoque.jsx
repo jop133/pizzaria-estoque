@@ -312,6 +312,21 @@ export function ContagemEstoque() {
             {aRevisar.length > 0 && <span className="bg-yellow-50 text-yellow-700 px-2 py-1 rounded-full">? {aRevisar.length} revisar</span>}
             {gruposSemMatch.length > 0 && <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded-full">✕ {gruposSemMatch.length} sem produto</span>}
           </div>
+          {(() => {
+            const deltas = gruposComProduto.map(g => {
+              const sis = produtos.find(p => p.id === g.produtoId)?.quantidade ?? 0
+              const t = parseFloat(String(g.total).replace(',', '.'))
+              return isNaN(t) ? null : t - sis
+            }).filter(d => d !== null)
+            const sobra = deltas.filter(d => d > 0).length
+            const falta = deltas.filter(d => d < 0).length
+            return (sobra > 0 || falta > 0) ? (
+              <div className="flex gap-3 text-xs">
+                <span className="text-green-600">{sobra} sobra</span>
+                <span className="text-red-600">{falta} falta</span>
+              </div>
+            ) : null
+          })()}
           {altosPendentes.length > 0 && (
             <button onClick={confirmarTodosAltos} className="btn-secondary w-full text-sm">
               ✓ Confirmar os {altosPendentes.length} com alta confiança
@@ -328,6 +343,7 @@ export function ContagemEstoque() {
           <GrupoCard
             key={g.id}
             grupo={g}
+            produto={produtos.find(p => p.id === g.produtoId)}
             onTrocar={() => { setBuscaPicker(''); setPicker({ grupoId: g.id }) }}
             onRemoverItem={(itemId) => removerItem(g.id, itemId)}
             onEditarTotal={(v) => editarTotal(g.id, v)}
@@ -542,8 +558,11 @@ export function ContagemEstoque() {
 }
 
 // Card de um produto na tela de confirmação por foto.
-function GrupoCard({ grupo, onTrocar, onRemoverItem, onEditarTotal, onConfirmar, onPular }) {
+function GrupoCard({ grupo, produto, onTrocar, onRemoverItem, onEditarTotal, onConfirmar, onPular }) {
   const confirmado = grupo.confirmado
+  const sistema = produto?.quantidade ?? 0
+  const totalNum = parseFloat(String(grupo.total).replace(',', '.'))
+  const delta = isNaN(totalNum) ? null : Math.round((totalNum - sistema) * 1000) / 1000
   const cor = confirmado
     ? 'border-green-300 bg-green-50'
     : grupo.confianca === 'media'
@@ -594,6 +613,18 @@ function GrupoCard({ grupo, onTrocar, onRemoverItem, onEditarTotal, onConfirmar,
         />
         <span className="text-sm text-gray-400">{grupo.produtoUnidade}</span>
       </div>
+
+      {/* Diferença vs. estoque do sistema (sobra/falta) */}
+      {delta !== null && (
+        <p className="text-xs pl-7 text-gray-500">
+          Sistema: {sistema} {grupo.produtoUnidade} ·{' '}
+          {delta === 0
+            ? <span className="text-gray-400">sem diferença</span>
+            : delta > 0
+              ? <span className="text-green-600 font-semibold">+{delta} sobra</span>
+              : <span className="text-red-600 font-semibold">{delta} falta</span>}
+        </p>
+      )}
 
       {/* Ações */}
       <div className="flex gap-2 pt-1">

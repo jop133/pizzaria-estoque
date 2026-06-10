@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { useProdutos, useFichas } from '../hooks/useEstoque'
+import { useProdutos, useFichas, useFichaIngredientes } from '../hooks/useEstoque'
 import { registrarSaidaFicha, registrarSaidaManual, registrarEntrada } from '../services/estoque'
 import { SeletorProduto } from '../components/SeletorProduto'
+import { Modal } from '../components/Modal'
 import toast from 'react-hot-toast'
 
 const TIPOS = [
@@ -19,9 +20,27 @@ export function Lancamentos() {
   const [form, setForm] = useState({ fichaId: '', produtoId: '', quantidade: '', observacao: '', marca: '' })
   const [loading, setLoading] = useState(false)
   const [pickerAberto, setPickerAberto] = useState(false)
+  const [avisoCru, setAvisoCru] = useState(null) // insumos que vão cair no cru (reserva OU)
 
   const fichaSel = fichas.find(f => f.id === parseInt(form.fichaId))
   const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
+  const ingredientesFicha = useFichaIngredientes(form.fichaId)
+
+  // Insumos com reserva (OU) que vão cair no cru por faltar o porcionado.
+  function planejarFallback(qtd) {
+    return ingredientesFicha.filter(i => i.produto_alt_id).map(i => {
+      const prim = produtos.find(p => p.id === i.produto_id)
+      const precisa = (i.quantidade || 0) * qtd
+      if ((prim?.quantidade || 0) < precisa) {
+        const alt = produtos.find(p => p.id === i.produto_alt_id)
+        return {
+          primNome: prim?.nome || 'Porcionado', tem: prim?.quantidade || 0, primUn: prim?.unidade || '',
+          precisa, altNome: alt?.nome || 'Cru', altQtd: (i.quantidade_alt || 0) * qtd, altUn: alt?.unidade || '',
+        }
+      }
+      return null
+    }).filter(Boolean)
+  }
 
   async function lancar() {
     const qtd = parseFloat(form.quantidade)
@@ -29,6 +48,16 @@ export function Lancamentos() {
     if (tipo === 'saida_ficha' && !form.fichaId) return toast.error('Selecione a ficha técnica')
     if (tipo !== 'saida_ficha' && !form.produtoId) return toast.error('Selecione o produto')
 
+    // Venda: se algum insumo com reserva vai usar o cru, avisa antes.
+    if (tipo === 'saida_ficha') {
+      const fallback = planejarFallback(qtd)
+      if (fallback.length > 0) { setAvisoCru(fallback); return }
+    }
+    await executarLancamento(qtd)
+  }
+
+  async function executarLancamento(qtd) {
+    setAvisoCru(null)
     setLoading(true)
     try {
       if (tipo === 'saida_ficha') {
@@ -157,6 +186,29 @@ export function Lancamentos() {
             onClose={() => setPickerAberto(false)}
           />
         )
+      )}
+
+      {avisoCru && (
+        <Modal title="Atenção — vai usar o cru" onClose={() => setAvisoCru(null)}>
+          <div className="space-y-4">
+            <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <span className="text-amber-600">⚠️</span>
+              <p className="text-sm text-amber-800">Não há <strong>porcionado</strong> suficiente. Estes serão consumidos do <strong>cru</strong>:</p>
+            </div>
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {avisoCru.map((a, i) => (
+                <div key={i} className="text-sm border-b border-gray-100 py-1.5">
+                  <p className="text-gray-700"><strong>{a.primNome}</strong> — tem {a.tem} {a.primUn}, precisa {a.precisa} {a.primUn}</p>
+                  <p className="text-xs text-amber-700">→ usará {a.altQtd} {a.altUn} de {a.altNome}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setAvisoCru(null)} className="btn-secondary flex-1">Voltar</button>
+              <button onClick={() => executarLancamento(parseFloat(form.quantidade))} disabled={loading} className="btn-primary flex-1">Lançar mesmo assim</button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )
