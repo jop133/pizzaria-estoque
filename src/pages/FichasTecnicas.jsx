@@ -14,7 +14,7 @@ import { SeletorProduto } from '../components/SeletorProduto'
 import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const CATEGORIAS = ['Pizza', 'Entradas', 'Principais', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
+const CATEGORIAS = ['Pizza', 'Entradas', 'Principais', 'Saladas', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
 const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml', 'un']
 const UNIDADES_MEDIDA = ['g', 'kg', 'ml', 'l']      // peso da porção (insumo gasto)
 const UNIDADES_PORCIONADO = ['pct', 'un']            // unidade do produto gerado
