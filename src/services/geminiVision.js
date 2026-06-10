@@ -178,6 +178,55 @@ Regras:
   }
 }
 
+// Lê uma LISTA DE PRODUÇÃO DE PORCIONADOS (tabela PRODUTO + MEDIDA). Cada linha
+// é um porcionado: nome + medida da porção. Retorna { itens: [{nome, medida, unidade}] }.
+export async function analisarPorcionados(imageBase64, mimeType, apiKey) {
+  const prompt = `Voce le uma LISTA DE PRODUCAO DE PORCIONADOS de uma pizzaria. E uma tabela com a coluna PRODUTO (nome) e a coluna MEDIDA (o tamanho da porcao, ex: "50G", "120 G", "450 G", "KG", "1,5 L", "LITRO"). Para CADA linha de produto:
+- nome: o nome do produto exatamente como escrito (ex: "Abacaxi", "Bacon Pronto Cubos").
+- medida: o NUMERO da medida (ex: 50 de "50G"; 1,5 de "1,5 L"). Se nao houver numero (so "KG" ou "LITRO"), use null.
+- unidade: a unidade da medida ("g","kg","ml","l"). Se nao der pra saber, null.
+
+Ignore titulos e cabecalhos (ex: "PRODUCAO PIZZARIA", mes/ano, dias da semana, "PRODUTO", "MEDIDA"). Leia TODAS as linhas de produto, sem pular nem inventar.
+
+Retorne SOMENTE este JSON:
+{"itens":[{"nome":"texto","medida":50,"unidade":"g"}]}`
+
+  const body = {
+    model: MODEL,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }
+        ]
+      }
+    ],
+    max_tokens: 4096,
+    temperature: 0.1,
+    response_format: { type: 'json_object' },
+  }
+
+  const res = await fetch(GROQ_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err?.error?.message || `Erro na API: ${res.status}`)
+  }
+  const data = await res.json()
+  const texto = data.choices?.[0]?.message?.content || ''
+  try {
+    const resultado = JSON.parse(texto)
+    if (!Array.isArray(resultado.itens)) resultado.itens = []
+    return resultado
+  } catch (e) {
+    throw new Error('Erro ao interpretar resposta: ' + texto.slice(0, 200), { cause: e })
+  }
+}
+
 // Chamada SÓ DE TEXTO (sem imagem) que agrupa nomes de produtos por tipo,
 // ignorando marca/peso/volume. Roda separada da leitura de visão (não afeta a
 // precisão dela e usa limites de modelo independentes no Groq).
