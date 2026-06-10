@@ -5,23 +5,33 @@ export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') 
   const orgId = session.organizacaoId
   if (!orgId) throw new Error('Sem organização ativa')
 
+  // select * para incluir, se existirem, as colunas da reserva "OU"
+  // (produto_alt_id / quantidade_alt) — antes da migração ficam ausentes.
   const { data: ingredientes } = await supabase
     .from('ficha_ingredientes')
-    .select('produto_id, quantidade')
+    .select('*')
     .eq('ficha_id', fichaId)
 
   for (const ing of ingredientes || []) {
-    const totalGasto = ing.quantidade * quantidade
-    const { data: prod } = await supabase
-      .from('produtos')
-      .select('quantidade')
-      .eq('id', ing.produto_id)
-      .single()
-    if (!prod) continue
+    const primNec = (ing.quantidade || 0) * quantidade
+    // Lê o estoque do principal (porcionado); decide a fonte (prioriza porcionado).
+    const { data: prim } = await supabase
+      .from('produtos').select('quantidade').eq('id', ing.produto_id).single()
+    let fonteId = ing.produto_id
+    let fonteQtd = primNec
+    let estoqueFonte = prim?.quantidade
+    if (ing.produto_alt_id && (prim?.quantidade || 0) < primNec) {
+      const { data: alt } = await supabase
+        .from('produtos').select('quantidade').eq('id', ing.produto_alt_id).single()
+      fonteId = ing.produto_alt_id
+      fonteQtd = (ing.quantidade_alt || 0) * quantidade
+      estoqueFonte = alt?.quantidade
+    }
+    if (estoqueFonte == null) continue
     await supabase
       .from('produtos')
-      .update({ quantidade: Math.max(0, prod.quantidade - totalGasto) })
-      .eq('id', ing.produto_id)
+      .update({ quantidade: Math.max(0, estoqueFonte - fonteQtd) })
+      .eq('id', fonteId)
   }
 
   await supabase.from('lancamentos').insert({

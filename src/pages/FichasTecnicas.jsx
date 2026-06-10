@@ -14,7 +14,7 @@ import { SeletorProduto } from '../components/SeletorProduto'
 import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
+const CATEGORIAS = ['Pizza', 'Entradas', 'Principais', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
 const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml', 'un']
 const UNIDADES_MEDIDA = ['g', 'kg', 'ml', 'l']      // peso da porção (insumo gasto)
 const UNIDADES_PORCIONADO = ['pct', 'un']            // unidade do produto gerado
@@ -876,7 +876,7 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
 
   const ehPorcionado = ficha.tipo_ficha === 'porcionado'
   const ehProducao = ficha.tipo_ficha === 'producao' || ehPorcionado
-  const mostrarReserva = ficha.tipo_ficha === 'producao' // o "OU" é só na Produção
+  const mostrarReserva = ficha.tipo_ficha === 'producao' || ficha.tipo_ficha === 'prato' // o "OU" (Produção e Prato)
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
 
   // Custo total dos insumos desta ficha (resolve produtos de produção também)
