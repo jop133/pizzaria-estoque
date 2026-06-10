@@ -565,7 +565,7 @@ export function FichasTecnicas() {
         )}
       </div>
 
-      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} />}
+      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} fichas={fichas} todosIngredientes={ingredientes} />}
 
       {modal && form.tipo_ficha === 'porcionado' && modal === 'novo' ? (
         <Modal title="Novo Porcionado" onClose={fechar}>
@@ -860,43 +860,107 @@ export function FichasTecnicas() {
   )
 }
 
-function DetalheIngredientes({ ficha, custoUnit }) {
+function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes = [] }) {
   const produtos = useProdutos()
   const ingredientes = useFichaIngredientes(ficha.id)
-  const [form, setForm] = useState({ produtoId: '', quantidade: '' })
+  const [form, setForm] = useState({ produtoId: '', quantidade: '', altId: '', quantidadeAlt: '' })
   const [lotes, setLotes] = useState('')
   const [produzindo, setProduzindo] = useState(false)
   const [pickerAberto, setPickerAberto] = useState(false)
+  const [pickerAlt, setPickerAlt] = useState(false)
+  const [reservaAberta, setReservaAberta] = useState(false)
+  const [sugestaoRaw, setSugestaoRaw] = useState(null) // { altId, rawPorPacote }
+  const [aviso, setAviso] = useState(null) // lista de insumos que vão cair no cru
   const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
+  const altSel = produtos.find(p => p.id === parseInt(form.altId))
 
   const ehPorcionado = ficha.tipo_ficha === 'porcionado'
   const ehProducao = ficha.tipo_ficha === 'producao' || ehPorcionado
+  const mostrarReserva = ficha.tipo_ficha === 'producao' // o "OU" é só na Produção
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
 
   // Custo total dos insumos desta ficha (resolve produtos de produção também)
   const custoTotal = ingredientes.reduce((s, ing) => s + (ing.quantidade || 0) * (custoUnit ? custoUnit(ing.produto_id) : 0), 0)
   const custoPorUnidade = ehProducao && ficha.rendimento > 0 ? custoTotal / ficha.rendimento : 0
 
+  // Ao escolher o insumo principal: se for um PORCIONADO, sugere o cru como
+  // reserva (achando a ficha do porcionado e o seu insumo cru).
+  function escolherPrincipal(p) {
+    setForm(f => ({ ...f, produtoId: String(p.id) }))
+    setPickerAberto(false)
+    const fp = fichas.find(x => x.tipo_ficha === 'porcionado' && x.produto_saida_id === p.id)
+    const ingRaw = fp ? todosIngredientes.find(i => i.ficha_id === fp.id) : null
+    if (ingRaw) {
+      setSugestaoRaw({ altId: ingRaw.produto_id, rawPorPacote: ingRaw.quantidade || 0 })
+      setReservaAberta(true)
+      setForm(f => ({ ...f, altId: String(ingRaw.produto_id) }))
+    } else {
+      setSugestaoRaw(null)
+    }
+  }
+
+  function mudarQuantidade(v) {
+    setForm(f => {
+      const next = { ...f, quantidade: v }
+      if (sugestaoRaw && String(f.altId) === String(sugestaoRaw.altId)) {
+        const q = parseFloat(String(v).replace(',', '.')) || 0
+        next.quantidadeAlt = q ? String(Math.round(q * sugestaoRaw.rawPorPacote * 1000) / 1000) : ''
+      }
+      return next
+    })
+  }
+
   async function adicionar() {
     if (!form.produtoId || !form.quantidade) return toast.error('Preencha produto e quantidade')
     const existe = ingredientes.find(i => i.produto_id === parseInt(form.produtoId))
     if (existe) return toast.error('Ingrediente já adicionado')
-    const { error } = await supabase.from('ficha_ingredientes').insert({
+    const insert = {
       ficha_id: ficha.id,
       produto_id: parseInt(form.produtoId),
       quantidade: parseFloat(form.quantidade),
-    })
+    }
+    if (mostrarReserva && form.altId && form.quantidadeAlt) {
+      insert.produto_alt_id = parseInt(form.altId)
+      insert.quantidade_alt = parseFloat(String(form.quantidadeAlt).replace(',', '.'))
+    }
+    const { error } = await supabase.from('ficha_ingredientes').insert(insert)
     if (error) return toast.error(error.message)
-    setForm({ produtoId: '', quantidade: '' })
-    toast.success('Ingrediente adicionado!')
+    setForm({ produtoId: '', quantidade: '', altId: '', quantidadeAlt: '' })
+    setSugestaoRaw(null); setReservaAberta(false)
+    toast.success('Insumo adicionado!')
   }
 
   async function remover(id) {
     await supabase.from('ficha_ingredientes').delete().eq('id', id)
   }
 
+  // Quais insumos com reserva vão cair no cru (porcionado insuficiente)?
+  function planejarFallback() {
+    const n = parseFloat(lotes) || 0
+    if (!n) return []
+    return ingredientes.filter(i => i.produto_alt_id).map(i => {
+      const prim = produtos.find(p => p.id === i.produto_id)
+      const precisa = (i.quantidade || 0) * n
+      if ((prim?.quantidade || 0) < precisa) {
+        const alt = produtos.find(p => p.id === i.produto_alt_id)
+        return {
+          primNome: prim?.nome || 'Porcionado', tem: prim?.quantidade || 0, primUn: prim?.unidade || '',
+          precisa, altNome: alt?.nome || 'Cru', altQtd: (i.quantidade_alt || 0) * n, altUn: alt?.unidade || '',
+        }
+      }
+      return null
+    }).filter(Boolean)
+  }
+
   async function produzir() {
     if (ingredientes.length === 0) return toast.error('Adicione os insumos antes de produzir')
+    const fallback = planejarFallback()
+    if (fallback.length > 0) { setAviso(fallback); return }
+    await executarProducao()
+  }
+
+  async function executarProducao() {
+    setAviso(null)
     setProduzindo(true)
     try {
       const gerado = await registrarProducao(ficha.id, lotes)
@@ -944,21 +1008,42 @@ function DetalheIngredientes({ ficha, custoUnit }) {
         </div>
       )}
 
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <button
-          onClick={() => setPickerAberto(true)}
-          className={`input flex-1 min-w-40 text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
-        >
-          {produtoSel ? `${produtoSel.nome} (${produtoSel.unidade})` : `Selecionar ${ehProducao ? 'insumo' : 'produto'}...`}
-        </button>
-        <input
-          type="number" min="0.001" step="0.001"
-          placeholder="Quantidade"
-          className="input w-32"
-          value={form.quantidade}
-          onChange={e => setForm(f => ({ ...f, quantidade: e.target.value }))}
-        />
-        <button onClick={adicionar} className="btn-primary">Adicionar</button>
+      <div className="space-y-2 mb-4">
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setPickerAberto(true)}
+            className={`input flex-1 min-w-40 text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
+          >
+            {produtoSel ? `${produtoSel.nome} (${produtoSel.unidade})` : `Selecionar ${ehProducao ? 'insumo' : 'produto'}...`}
+          </button>
+          <input
+            type="number" min="0.001" step="0.001"
+            placeholder="Quantidade"
+            className="input w-32"
+            value={form.quantidade}
+            onChange={e => mudarQuantidade(e.target.value)}
+          />
+          <button onClick={adicionar} className="btn-primary">Adicionar</button>
+        </div>
+
+        {/* Reserva (OU): usa o cru se faltar o porcionado — só na Produção */}
+        {mostrarReserva && (!reservaAberta && !form.altId ? (
+          <button onClick={() => setReservaAberta(true)} className="text-xs text-red-700 underline">
+            + adicionar reserva (OU cru, se faltar o porcionado)
+          </button>
+        ) : (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-1">
+            <p className="text-xs text-amber-800 font-medium">OU — usa o cru se faltar o porcionado</p>
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={() => setPickerAlt(true)} className={`input flex-1 min-w-40 text-left text-sm ${altSel ? 'text-gray-800' : 'text-gray-400'}`}>
+                {altSel ? `${altSel.nome} (${altSel.unidade})` : 'Selecionar produto cru...'}
+              </button>
+              <input type="number" min="0.001" step="0.001" placeholder="Qtd cru" className="input w-24 text-sm"
+                value={form.quantidadeAlt} onChange={e => setForm(f => ({ ...f, quantidadeAlt: e.target.value }))} />
+              <button onClick={() => { setForm(f => ({ ...f, altId: '', quantidadeAlt: '' })); setReservaAberta(false); setSugestaoRaw(null) }} className="text-xs text-gray-400 underline">remover</button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {pickerAberto && (
@@ -966,8 +1051,17 @@ function DetalheIngredientes({ ficha, custoUnit }) {
           titulo={`Selecionar ${ehProducao ? 'insumo' : 'produto'}`}
           produtos={produtos}
           excluirIds={ingredientes.map(i => i.produto_id)}
-          onEscolher={p => { setForm(f => ({ ...f, produtoId: String(p.id) })); setPickerAberto(false) }}
+          onEscolher={escolherPrincipal}
           onClose={() => setPickerAberto(false)}
+        />
+      )}
+      {pickerAlt && (
+        <SeletorProduto
+          titulo="Produto cru (reserva)"
+          produtos={produtos}
+          excluirIds={[parseInt(form.produtoId)].filter(Boolean)}
+          onEscolher={p => { setForm(f => ({ ...f, altId: String(p.id) })); setPickerAlt(false) }}
+          onClose={() => setPickerAlt(false)}
         />
       )}
 
@@ -985,13 +1079,17 @@ function DetalheIngredientes({ ficha, custoUnit }) {
           <tbody>
             {ingredientes.map(ing => {
               const prod = produtos.find(p => p.id === ing.produto_id)
+              const alt = ing.produto_alt_id ? produtos.find(p => p.id === ing.produto_alt_id) : null
               return (
                 <tr key={ing.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2 text-gray-700">{prod?.nome ?? 'Produto removido'}</td>
-                  <td className="px-3 py-2 text-right font-mono">
+                  <td className="px-3 py-2 text-gray-700">
+                    {prod?.nome ?? 'Produto removido'}
+                    {alt && <span className="block text-xs text-amber-700">↳ OU: {alt.nome} — {ing.quantidade_alt} {alt.unidade}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono align-top">
                     {ing.quantidade} <span className="text-gray-400 text-xs">{prod?.unidade}</span>
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right align-top">
                     <button onClick={() => remover(ing.id)} className="text-red-400 hover:text-red-600 text-xs">Remover</button>
                   </td>
                 </tr>
@@ -999,6 +1097,29 @@ function DetalheIngredientes({ ficha, custoUnit }) {
             })}
           </tbody>
         </table>
+      )}
+
+      {aviso && (
+        <Modal title="Atenção — vai usar o cru" onClose={() => setAviso(null)}>
+          <div className="space-y-4">
+            <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <span className="text-amber-600">⚠️</span>
+              <p className="text-sm text-amber-800">Não há <strong>porcionado</strong> suficiente. Estes serão consumidos do <strong>cru</strong>:</p>
+            </div>
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {aviso.map((a, i) => (
+                <div key={i} className="text-sm border-b border-gray-100 py-1.5">
+                  <p className="text-gray-700"><strong>{a.primNome}</strong> — tem {a.tem} {a.primUn}, precisa {a.precisa} {a.primUn}</p>
+                  <p className="text-xs text-amber-700">→ usará {a.altQtd} {a.altUn} de {a.altNome}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setAviso(null)} className="btn-secondary flex-1">Voltar</button>
+              <button onClick={executarProducao} disabled={produzindo} className="btn-primary flex-1">Produzir mesmo assim</button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

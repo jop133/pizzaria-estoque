@@ -145,32 +145,51 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
   if (!ficha.produto_saida_id) throw new Error('Esta ficha de produção não tem um produto gerado definido')
   if (!ficha.rendimento || ficha.rendimento <= 0) throw new Error('Defina o rendimento da ficha de produção')
 
-  // Insumos da ficha
+  // Insumos da ficha (select * para incluir, quando existirem, as colunas da
+  // alternativa "OU": produto_alt_id / quantidade_alt — antes da migração ficam
+  // ausentes e o comportamento é o de sempre).
   const { data: ingredientes } = await supabase
     .from('ficha_ingredientes')
-    .select('produto_id, quantidade')
+    .select('*')
     .eq('ficha_id', fichaId)
 
   if (!ingredientes || ingredientes.length === 0) {
     throw new Error('Esta ficha de produção não tem insumos cadastrados')
   }
 
-  // Carrega os produtos envolvidos (uma consulta) para checar e atualizar.
-  const ids = ingredientes.map(i => i.produto_id)
+  // Carrega os produtos envolvidos (principais + alternativos) numa consulta.
+  const ids = [...new Set(ingredientes.flatMap(i => [i.produto_id, i.produto_alt_id].filter(Boolean)))]
   const { data: prods } = await supabase
     .from('produtos')
     .select('id, nome, quantidade, unidade')
     .in('id', ids)
   const mapaProd = Object.fromEntries((prods || []).map(p => [p.id, p]))
 
-  // PRÉ-CHECAGEM: bloqueia se faltar algum insumo (nada é alterado antes disto).
-  const faltantes = []
+  // Decide a fonte de cada insumo: prioriza o porcionado (produto_id); se não
+  // houver o suficiente E existir reserva (produto_alt_id), usa o cru. Agrega o
+  // necessário por produto (vários insumos podem usar o mesmo).
+  const necessarioPorProduto = {}
   for (const ing of ingredientes) {
-    const prod = mapaProd[ing.produto_id]
-    const necessario = ing.quantidade * n
+    const primNec = (ing.quantidade || 0) * n
+    let fonteId = ing.produto_id
+    let fonteQtd = primNec
+    if (ing.produto_alt_id) {
+      const dispPrim = mapaProd[ing.produto_id]?.quantidade || 0
+      if (dispPrim < primNec) {
+        fonteId = ing.produto_alt_id
+        fonteQtd = (ing.quantidade_alt || 0) * n
+      }
+    }
+    necessarioPorProduto[fonteId] = (necessarioPorProduto[fonteId] || 0) + fonteQtd
+  }
+
+  // PRÉ-CHECAGEM: bloqueia se faltar a fonte escolhida (nada é alterado antes disto).
+  const faltantes = []
+  for (const [id, nec] of Object.entries(necessarioPorProduto)) {
+    const prod = mapaProd[id]
     const disponivel = prod?.quantidade || 0
-    if (disponivel < necessario) {
-      const falta = Math.round((necessario - disponivel) * 1000) / 1000
+    if (disponivel < nec) {
+      const falta = Math.round((nec - disponivel) * 1000) / 1000
       faltantes.push(`${prod?.nome || 'Produto'} (falta ${falta} ${prod?.unidade || ''})`.trim())
     }
   }
@@ -178,15 +197,14 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
     throw new Error('Estoque insuficiente para produzir: ' + faltantes.join('; '))
   }
 
-  // Consome os insumos
-  for (const ing of ingredientes) {
-    const prod = mapaProd[ing.produto_id]
+  // Consome os insumos (já agregados por produto).
+  for (const [id, nec] of Object.entries(necessarioPorProduto)) {
+    const prod = mapaProd[id]
     if (!prod) continue
-    const gasto = ing.quantidade * n
     await supabase
       .from('produtos')
-      .update({ quantidade: Math.max(0, prod.quantidade - gasto) })
-      .eq('id', ing.produto_id)
+      .update({ quantidade: Math.max(0, prod.quantidade - nec) })
+      .eq('id', parseInt(id))
   }
 
   // Adiciona o produto gerado
