@@ -2,11 +2,12 @@ import { useState, useRef } from 'react'
 import { useFichas, useProdutos, useFichaIngredientes, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
-import { analisarFichaTecnica, prepararImagem } from '../services/geminiVision'
+import { analisarFichaTecnica, analisarPorcionados, prepararImagem } from '../services/geminiVision'
 import { registrarProducao, registrarEvento } from '../services/estoque'
 import { converterUnidade as converterParaUnidadeProduto } from '../lib/unidades'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
+import { lerPorcionadosXlsx } from '../lib/porcionados'
 import { Modal } from '../components/Modal'
 import { Badge } from '../components/Badge'
 import { SeletorProduto } from '../components/SeletorProduto'
@@ -15,8 +16,17 @@ import toast from 'react-hot-toast'
 
 const CATEGORIAS = ['Pizza', 'Massa', 'Molho', 'Sobremesa', 'Bebida', 'Outros']
 const UNIDADES_PRODUCAO = ['kg', 'g', 'l', 'ml', 'un']
+const UNIDADES_MEDIDA = ['g', 'kg', 'ml', 'l']      // peso da porção (insumo gasto)
+const UNIDADES_PORCIONADO = ['pct', 'un']            // unidade do produto gerado
 const VAZIO_PRATO = { nome: '', categoria: 'Pizza', descricao: '', tipo_ficha: 'prato' }
 const VAZIO_PRODUCAO = { nome: '', descricao: '', tipo_ficha: 'producao', produto_saida_id: '', unidade: 'kg', rendimento: '' }
+const VAZIO_PORCIONADO = { nome: '', tipo_ficha: 'porcionado', medida: '', unidadeMedida: 'g', unidade: 'pct', insumoId: '' }
+
+// Nome do produto gerado de um porcionado: "Abacaxi Porcionado 50G".
+function nomePorcionado(base, medida, unidadeMedida) {
+  const m = String(medida).replace('.', ',')
+  return `${(base || '').trim()} Porcionado ${m}${(unidadeMedida || '').toUpperCase()}`
+}
 
 export function FichasTecnicas() {
   const fichas = useFichas()
@@ -33,16 +43,49 @@ export function FichasTecnicas() {
   const [analisando, setAnalisando] = useState(false)
   const [resultadoFoto, setResultadoFoto] = useState(null)
   const [pickerIng, setPickerIng] = useState(null) // índice do insumo c/ seletor aberto
+  const [pickerInsumoNovo, setPickerInsumoNovo] = useState(false) // seletor de insumo no form de novo porcionado
+  const [porcionadosFoto, setPorcionadosFoto] = useState(null) // lista lida da foto (batch)
+  const [pickerBatch, setPickerBatch] = useState(null) // { idx } — seletor de insumo de uma linha do batch
+  const [criandoBatch, setCriandoBatch] = useState(false)
   const fileRefFoto = useRef()
   const cameraRefFoto = useRef()
 
   const apiKey = localStorage.getItem('gemini_api_key') || ''
   const ehProducao = aba === 'producao'
+  const ehPorcionado = aba === 'porcionado'
 
   async function analisarFoto(e) {
     const original = e.target.files[0]
     e.target.value = ''
     if (!original) return
+
+    // Porcionados: aceita planilha xlsx (lê direto as colunas PRODUTO + MEDIDA, sem IA).
+    if (ehPorcionado && (/\.xlsx?$/i.test(original.name) || (original.type || '').includes('sheet'))) {
+      const t = toast.loading('Lendo planilha...')
+      try {
+        const itens = await lerPorcionadosXlsx(original)
+        const lista = itens.map(it => {
+          const insumo = acharProdutoPorNome(it.nome)
+          return {
+            nome: it.nome,
+            medida: it.medida ?? '',
+            unidadeMedida: UNIDADES_MEDIDA.includes((it.unidade || '').toLowerCase()) ? it.unidade.toLowerCase() : 'g',
+            unidade: 'pct',
+            insumoId: insumo?.id ?? null,
+          }
+        }).filter(x => x.nome)
+        toast.dismiss(t)
+        if (lista.length === 0) { toast.error('Nenhum porcionado encontrado na planilha.'); return }
+        setFotoAnalise(null)
+        setPorcionadosFoto(lista)
+        toast.success(`${lista.length} porcionado(s) lido(s). Revise antes de criar.`)
+      } catch (err) {
+        toast.dismiss(t)
+        toast.error('Erro ao ler planilha: ' + (err?.message || 'verifique o arquivo'), { duration: 6000 })
+      }
+      return
+    }
+
     let file = original
     if (original.type === 'application/pdf' || /\.pdf$/i.test(original.name)) {
       const t = toast.loading('Lendo arquivo...')
@@ -59,6 +102,7 @@ export function FichasTecnicas() {
     }
     setFotoAnalise({ url: URL.createObjectURL(file), file })
     setResultadoFoto(null)
+    setPorcionadosFoto(null)
   }
 
   // Acha o produto do estoque que melhor casa com um nome (exato, depois parcial).
@@ -70,12 +114,82 @@ export function FichasTecnicas() {
     return prod || null
   }
 
+  // Cria uma ficha de PORCIONADO: produto gerado "{base} Porcionado {medida}"
+  // (categoria Porcionados, unidade pct/un, rendimento 1) + insumo = produto cru
+  // de mesmo nome, quantidade = medida (1 produção = 1 pacote).
+  async function criarPorcionado({ base, medida, unidadeMedida, unidadeGerado, insumoId }, orgId) {
+    const baseLimpo = (base || '').trim()
+    if (!baseLimpo) return null
+    const nomeGerado = nomePorcionado(baseLimpo, medida, unidadeMedida)
+
+    // Produto gerado (porcionado): cria ou reaproveita pelo nome.
+    let prodGeradoId
+    const existente = produtos.find(p => p.nome.trim().toLowerCase() === nomeGerado.toLowerCase())
+    if (existente) {
+      prodGeradoId = existente.id
+      await supabase.from('produtos').update({ unidade: unidadeGerado, categoria: 'Porcionados' }).eq('id', prodGeradoId)
+    } else {
+      const { data: novo, error } = await supabase.from('produtos')
+        .insert({ organizacao_id: orgId, nome: nomeGerado, categoria: 'Porcionados', unidade: unidadeGerado, quantidade: 0, estoque_minimo: 0 })
+        .select().single()
+      if (error) { toast.error(error.message); return null }
+      prodGeradoId = novo.id
+      await registrarEvento('produto_novo', { produtoId: prodGeradoId, nome: nomeGerado })
+    }
+
+    const { data: ficha, error: errFicha } = await supabase.from('fichas_tecnicas')
+      .insert({ organizacao_id: orgId, nome: nomeGerado, categoria: 'Porcionados', descricao: '', tipo_ficha: 'porcionado', produto_saida_id: prodGeradoId, rendimento: 1 })
+      .select().single()
+    if (errFicha) { toast.error(errFicha.message); return null }
+
+    // Insumo: produto cru escolhido, ou achado pelo nome, ou criado.
+    let insumo = insumoId ? produtos.find(p => p.id === insumoId) : null
+    if (!insumo) insumo = acharProdutoPorNome(baseLimpo)
+    let insumoProdId, insumoUnidade
+    if (insumo) { insumoProdId = insumo.id; insumoUnidade = insumo.unidade }
+    else {
+      const { data: novoIns } = await supabase.from('produtos')
+        .insert({ organizacao_id: orgId, nome: baseLimpo, categoria: 'Outros', unidade: unidadeMedida, quantidade: 0, estoque_minimo: 0 })
+        .select().single()
+      insumoProdId = novoIns?.id
+      insumoUnidade = unidadeMedida
+      if (insumoProdId) await registrarEvento('produto_novo', { produtoId: insumoProdId, nome: baseLimpo })
+    }
+    if (insumoProdId) {
+      const qtd = converterParaUnidadeProduto(medida, unidadeMedida, insumoUnidade)
+      await supabase.from('ficha_ingredientes').insert({ ficha_id: ficha.id, produto_id: insumoProdId, quantidade: qtd })
+    }
+
+    await registrarEvento('ficha_nova', { fichaId: ficha.id, nome: nomeGerado })
+    return ficha
+  }
+
   async function processarFoto() {
     if (!fotoAnalise) return
     if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
     setAnalisando(true)
     try {
       const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
+
+      // Porcionados: lê a LISTA inteira (cria vários de uma vez).
+      if (ehPorcionado) {
+        const res = await analisarPorcionados(base64, mimeType, apiKey)
+        const lista = (res.itens || []).map(it => {
+          const base = (it.nome || '').trim()
+          const insumo = acharProdutoPorNome(base)
+          return {
+            nome: base,
+            medida: it.medida ?? '',
+            unidadeMedida: UNIDADES_MEDIDA.includes((it.unidade || '').toLowerCase()) ? it.unidade.toLowerCase() : 'g',
+            unidade: 'pct',
+            insumoId: insumo?.id ?? null,
+          }
+        }).filter(x => x.nome)
+        setPorcionadosFoto(lista)
+        setAnalisando(false)
+        return
+      }
+
       const res = await analisarFichaTecnica(base64, mimeType, produtos, apiKey, ehProducao ? 'producao' : 'prato')
       // Enriquece cada insumo: vínculo sugerido (produtoId) + defaults editáveis.
       const ingredientes = (res.ingredientes || []).map(ing => {
@@ -105,6 +219,35 @@ export function FichasTecnicas() {
   }
   function adicionarIngrediente() {
     setResultadoFoto(r => ({ ...r, ingredientes: [...(r.ingredientes || []), { nome: '', quantidade: '', unidade: 'un', produtoId: null }] }))
+  }
+
+  // --- Batch de porcionados (foto) ---
+  function editarBatch(i, patch) {
+    setPorcionadosFoto(prev => prev.map((x, idx) => idx === i ? { ...x, ...patch } : x))
+  }
+  function removerBatch(i) {
+    setPorcionadosFoto(prev => prev.filter((_, idx) => idx !== i))
+  }
+  function fecharFoto() {
+    setModalFoto(false); setFotoAnalise(null); setResultadoFoto(null)
+    setPickerIng(null); setPorcionadosFoto(null); setPickerBatch(null)
+  }
+  async function criarBatch() {
+    const validos = (porcionadosFoto || []).filter(x => x.nome.trim() && parseFloat(String(x.medida).replace(',', '.')) > 0)
+    if (validos.length === 0) return toast.error('Preencha nome e medida de ao menos um item')
+    setCriandoBatch(true)
+    let ok = 0
+    for (const x of validos) {
+      const ficha = await criarPorcionado({
+        base: x.nome, medida: parseFloat(String(x.medida).replace(',', '.')),
+        unidadeMedida: x.unidadeMedida, unidadeGerado: x.unidade,
+        insumoId: x.insumoId || null,
+      }, session.organizacaoId)
+      if (ficha) ok++
+    }
+    setCriandoBatch(false)
+    if (ok > 0) toast.success(`${ok} porcionado(s) criado(s)!`)
+    fecharFoto()
   }
 
   // Resolve o produto de um insumo da ficha: usa o vínculo escolhido (produtoId)
@@ -219,7 +362,7 @@ export function FichasTecnicas() {
   }
 
   function abrirNovo() {
-    setForm(ehProducao ? VAZIO_PRODUCAO : VAZIO_PRATO)
+    setForm(ehPorcionado ? VAZIO_PORCIONADO : ehProducao ? VAZIO_PRODUCAO : VAZIO_PRATO)
     setModal('novo')
   }
   function abrirEditar(f) {
@@ -230,13 +373,32 @@ export function FichasTecnicas() {
   function fechar() { setModal(null) }
 
   async function salvar() {
-    if (!form.nome.trim()) return toast.error('Nome obrigatório')
     const tipo = form.tipo_ficha || 'prato'
+
+    // Porcionado NOVO: fluxo próprio (nome base + medida + insumo automático).
+    if (tipo === 'porcionado' && modal === 'novo') {
+      const base = (form.nome || '').trim()
+      if (!base) return toast.error('Nome obrigatório')
+      const medida = parseFloat(String(form.medida).replace(',', '.'))
+      if (!medida || medida <= 0) return toast.error('Informe a medida da porção (maior que zero)')
+      const ficha = await criarPorcionado({
+        base, medida, unidadeMedida: form.unidadeMedida, unidadeGerado: form.unidade,
+        insumoId: form.insumoId ? parseInt(form.insumoId) : null,
+      }, session.organizacaoId)
+      if (!ficha) return
+      toast.success('Porcionado criado!')
+      setDetalhe(ficha)
+      return fechar()
+    }
+
+    if (!form.nome.trim()) return toast.error('Nome obrigatório')
     let data
-    if (tipo === 'producao') {
-      if (!form.rendimento || parseFloat(form.rendimento) <= 0) return toast.error('Informe o rendimento (maior que zero)')
+    if (tipo === 'producao' || tipo === 'porcionado') {
+      const ehPorc = tipo === 'porcionado'
+      if (!ehPorc && (!form.rendimento || parseFloat(form.rendimento) <= 0)) return toast.error('Informe o rendimento (maior que zero)')
       const nome = form.nome.trim()
-      const unidade = form.unidade || 'kg'
+      const unidade = form.unidade || (ehPorc ? 'pct' : 'kg')
+      const categoriaProd = ehPorc ? 'Porcionados' : 'Produções Internas'
       const orgId = session.organizacaoId
 
       // O produto gerado é o próprio nome da ficha — cria no estoque (ou
@@ -244,16 +406,16 @@ export function FichasTecnicas() {
       // sincroniza nome/unidade do produto vinculado.
       let produtoSaidaId = form.produto_saida_id ? parseInt(form.produto_saida_id) : null
       if (produtoSaidaId) {
-        await supabase.from('produtos').update({ nome, unidade }).eq('id', produtoSaidaId)
+        await supabase.from('produtos').update({ nome, unidade, categoria: categoriaProd }).eq('id', produtoSaidaId)
       } else {
         const existente = produtos.find(p => p.nome.trim().toLowerCase() === nome.toLowerCase())
         if (existente) {
           produtoSaidaId = existente.id
-          await supabase.from('produtos').update({ unidade }).eq('id', produtoSaidaId)
+          await supabase.from('produtos').update({ unidade, categoria: categoriaProd }).eq('id', produtoSaidaId)
         } else {
           const { data: novoProd, error: errProd } = await supabase
             .from('produtos')
-            .insert({ organizacao_id: orgId, nome, categoria: 'Produções Internas', unidade, quantidade: 0, estoque_minimo: 0 })
+            .insert({ organizacao_id: orgId, nome, categoria: categoriaProd, unidade, quantidade: 0, estoque_minimo: 0 })
             .select()
             .single()
           if (errProd) return toast.error(errProd.message)
@@ -264,11 +426,11 @@ export function FichasTecnicas() {
 
       data = {
         nome,
-        categoria: 'Produção',
+        categoria: ehPorc ? 'Porcionados' : 'Produção',
         descricao: form.descricao || '',
-        tipo_ficha: 'producao',
+        tipo_ficha: tipo,
         produto_saida_id: produtoSaidaId,
-        rendimento: parseFloat(form.rendimento),
+        rendimento: ehPorc ? 1 : parseFloat(form.rendimento),
       }
     } else {
       data = {
@@ -300,7 +462,7 @@ export function FichasTecnicas() {
   }
 
   async function excluir(f) {
-    const ehProd = f.tipo_ficha === 'producao'
+    const ehProd = f.tipo_ficha === 'producao' || f.tipo_ficha === 'porcionado'
     if (!confirm('Excluir esta ficha?')) return
     // Remove as linhas da receita desta ficha (não apaga os produtos/insumos).
     await supabase.from('ficha_ingredientes').delete().eq('ficha_id', f.id)
@@ -331,8 +493,8 @@ export function FichasTecnicas() {
         </div>
       </div>
 
-      {/* Alternância Pratos | Produção */}
-      <div className="flex bg-gray-100 rounded-xl p-1 gap-1 max-w-sm">
+      {/* Alternância Pratos | Produção | Porcionados */}
+      <div className="flex bg-gray-100 rounded-xl p-1 gap-1 max-w-md">
         <button
           onClick={() => trocarAba('prato')}
           className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${aba === 'prato' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
@@ -345,12 +507,20 @@ export function FichasTecnicas() {
         >
           ⚙️ Produção
         </button>
+        <button
+          onClick={() => trocarAba('porcionado')}
+          className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${aba === 'porcionado' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
+        >
+          📦 Porcionados
+        </button>
       </div>
 
       <p className="text-xs text-gray-500">
-        {ehProducao
-          ? 'Receitas de fabricação: ao produzir, consomem insumos e geram um produto para o estoque (ex: massa, molho).'
-          : 'Receitas de pratos vendidos: ao registrar a venda, consomem os ingredientes do estoque.'}
+        {ehPorcionado
+          ? 'Porcionar: divide um produto a granel em porções. Cada produção = 1 pacote; consome a medida em insumo do mesmo nome.'
+          : ehProducao
+            ? 'Receitas de fabricação: ao produzir, consomem insumos e geram um produto para o estoque (ex: massa, molho).'
+            : 'Receitas de pratos vendidos: ao registrar a venda, consomem os ingredientes do estoque.'}
       </p>
 
       <input
@@ -374,11 +544,13 @@ export function FichasTecnicas() {
                   <p className="font-semibold text-gray-800">{f.nome}</p>
                   {f.tipo_ficha === 'producao'
                     ? <p className="text-xs text-gray-500 mt-1">Rende {f.rendimento || '—'} {prodGerado?.unidade || ''}/lote</p>
-                    : (f.descricao && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{f.descricao}</p>)
+                    : f.tipo_ficha === 'porcionado'
+                      ? <p className="text-xs text-gray-500 mt-1">1 {prodGerado?.unidade || 'pct'} por produção</p>
+                      : (f.descricao && <p className="text-xs text-gray-400 mt-1 line-clamp-2">{f.descricao}</p>)
                   }
                 </div>
-                <Badge color={f.tipo_ficha === 'producao' ? 'blue' : 'orange'}>
-                  {f.tipo_ficha === 'producao' ? 'Produção' : f.categoria}
+                <Badge color={f.tipo_ficha === 'producao' ? 'blue' : f.tipo_ficha === 'porcionado' ? 'green' : 'orange'}>
+                  {f.tipo_ficha === 'producao' ? 'Produção' : f.tipo_ficha === 'porcionado' ? 'Porcionado' : f.categoria}
                 </Badge>
               </div>
               <div className="flex gap-2 mt-3">
@@ -393,17 +565,65 @@ export function FichasTecnicas() {
         )}
       </div>
 
-      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} />}
+      {detalhe && <DetalheIngredientes ficha={detalhe} custoUnit={custoUnit} fichas={fichas} todosIngredientes={ingredientes} />}
 
-      {modal && (
+      {modal && form.tipo_ficha === 'porcionado' && modal === 'novo' ? (
+        <Modal title="Novo Porcionado" onClose={fechar}>
+          <div className="space-y-3">
+            <div>
+              <label className="label">Nome do produto *</label>
+              <input className="input" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder="Ex: Abacaxi" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Medida da porção *</label>
+                <div className="flex gap-1">
+                  <input type="number" min="0.001" step="0.001" className="input" value={form.medida} onChange={e => setForm(f => ({ ...f, medida: e.target.value }))} placeholder="Ex: 50" />
+                  <select className="input w-20" value={form.unidadeMedida} onChange={e => setForm(f => ({ ...f, unidadeMedida: e.target.value }))}>
+                    {UNIDADES_MEDIDA.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="label">Unidade do pacote *</label>
+                <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                  {UNIDADES_PORCIONADO.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label className="label">Insumo (produto cru consumido)</label>
+              <button onClick={() => setPickerInsumoNovo(true)} className={`input text-left ${form.insumoId ? 'text-gray-800' : 'text-gray-400'}`}>
+                {form.insumoId
+                  ? produtos.find(p => p.id === parseInt(form.insumoId))?.nome
+                  : (acharProdutoPorNome(form.nome)?.nome || `Criar "${form.nome.trim() || '...'}" automaticamente`)}
+              </button>
+            </div>
+            {form.nome.trim() && form.medida && (
+              <p className="text-xs text-gray-500 bg-gray-50 rounded-lg p-2">
+                Será criado: <strong>{nomePorcionado(form.nome, form.medida, form.unidadeMedida)}</strong> ({form.unidade}).
+                Cada produção consome {form.medida} {form.unidadeMedida} de insumo.
+              </p>
+            )}
+            <button onClick={salvar} className="btn-primary w-full">Criar Porcionado</button>
+          </div>
+
+          {pickerInsumoNovo && (
+            <SeletorProduto
+              titulo="Insumo do porcionado"
+              produtos={produtos}
+              onEscolher={p => { setForm(f => ({ ...f, insumoId: String(p.id) })); setPickerInsumoNovo(false) }}
+              onClose={() => setPickerInsumoNovo(false)}
+              opcaoExtra={{ label: '+ Criar pelo nome digitado', onEscolher: () => { setForm(f => ({ ...f, insumoId: '' })); setPickerInsumoNovo(false) } }}
+            />
+          )}
+        </Modal>
+      ) : modal && (
         <Modal title={modal === 'novo' ? (form.tipo_ficha === 'producao' ? 'Nova Ficha de Produção' : 'Nova Ficha de Prato') : 'Editar Ficha'} onClose={fechar}>
           <div className="space-y-3">
             <div>
-              <label className="label">{form.tipo_ficha === 'producao' ? 'Nome do produto gerado *' : 'Nome *'}</label>
+              <label className="label">{(form.tipo_ficha === 'producao' || form.tipo_ficha === 'porcionado') ? 'Nome do produto gerado *' : 'Nome *'}</label>
               <input className="input" value={form.nome} onChange={e => setForm(f => ({ ...f, nome: e.target.value }))} placeholder={form.tipo_ficha === 'producao' ? 'Ex: Massa de Pizza' : 'Ex: Pizza Margherita'} />
-              {form.tipo_ficha === 'producao' && (
-                <p className="text-xs text-gray-400 mt-1">Este produto será criado no estoque automaticamente.</p>
-              )}
             </div>
 
             {form.tipo_ficha === 'producao' ? (
@@ -419,6 +639,14 @@ export function FichasTecnicas() {
                   <input type="number" min="0.001" step="0.001" className="input" value={form.rendimento} onChange={e => setForm(f => ({ ...f, rendimento: e.target.value }))} placeholder={`Ex: 5 (${form.unidade || 'kg'} por produção)`} />
                 </div>
               </>
+            ) : form.tipo_ficha === 'porcionado' ? (
+              <div>
+                <label className="label">Unidade do pacote *</label>
+                <select className="input" value={form.unidade} onChange={e => setForm(f => ({ ...f, unidade: e.target.value }))}>
+                  {UNIDADES_PORCIONADO.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+                <p className="text-xs text-gray-400 mt-1">A medida/insumo são editados na lista de insumos abaixo da ficha.</p>
+              </div>
             ) : (
               <div>
                 <label className="label">Categoria</label>
@@ -428,39 +656,82 @@ export function FichasTecnicas() {
               </div>
             )}
 
-            <div>
-              <label className="label">Descrição</label>
-              <textarea className="input resize-none" rows={3} value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} placeholder="Descrição opcional..." />
-            </div>
+            {form.tipo_ficha !== 'porcionado' && (
+              <div>
+                <label className="label">Descrição</label>
+                <textarea className="input resize-none" rows={3} value={form.descricao} onChange={e => setForm(f => ({ ...f, descricao: e.target.value }))} placeholder="Descrição opcional..." />
+              </div>
+            )}
             <button onClick={salvar} className="btn-primary w-full">Salvar</button>
           </div>
         </Modal>
       )}
 
       {modalFoto && (
-        <Modal title="Importar Ficha por Foto" onClose={() => { setModalFoto(false); setFotoAnalise(null); setResultadoFoto(null); setPickerIng(null) }}>
+        <Modal title={ehPorcionado ? 'Importar Porcionados por Foto' : 'Importar Ficha por Foto'} onClose={fecharFoto}>
           <div className="space-y-4">
             <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center space-y-3">
               {fotoAnalise ? (
                 <img src={fotoAnalise.url} alt="" className="max-h-48 mx-auto rounded-lg object-contain" />
               ) : (
-                <p className="text-gray-400 text-sm">Foto da ficha técnica, cardápio ou receita</p>
+                <p className="text-gray-400 text-sm">{ehPorcionado ? 'Foto OU planilha (.xlsx) da lista de porcionados (PRODUTO + MEDIDA)' : 'Foto da ficha técnica, cardápio ou receita'}</p>
               )}
               <div className="flex gap-2 justify-center flex-wrap">
                 <button onClick={() => fileRefFoto.current.click()} className="btn-secondary text-sm">📁 Arquivo</button>
                 <button onClick={() => cameraRefFoto.current.click()} className="btn-secondary text-sm">📷 Câmera</button>
               </div>
-              <input ref={fileRefFoto} type="file" accept="image/*,application/pdf" className="hidden" onChange={analisarFoto} />
+              <input ref={fileRefFoto} type="file" accept={ehPorcionado ? 'image/*,application/pdf,.xlsx,.xls' : 'image/*,application/pdf'} className="hidden" onChange={analisarFoto} />
               <input ref={cameraRefFoto} type="file" accept="image/*" capture="environment" className="hidden" onChange={analisarFoto} />
             </div>
 
-            {fotoAnalise && !resultadoFoto && (
+            {fotoAnalise && !resultadoFoto && !porcionadosFoto && (
               <button onClick={processarFoto} disabled={analisando} className="btn-primary w-full disabled:opacity-50">
                 {analisando ? 'Analisando...' : '🔍 Analisar com IA'}
               </button>
             )}
 
-            {resultadoFoto && (
+            {/* Batch de porcionados */}
+            {ehPorcionado && porcionadosFoto && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-500">{porcionadosFoto.length} porcionado(s) lido(s). Revise antes de criar.</p>
+                  <button onClick={() => setPorcionadosFoto(prev => [...prev, { nome: '', medida: '', unidadeMedida: 'g', unidade: 'pct', insumoId: null }])} className="text-xs text-red-700 underline">+ adicionar</button>
+                </div>
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  {porcionadosFoto.map((x, i) => {
+                    const insumo = x.insumoId ? produtos.find(p => p.id === x.insumoId) : null
+                    return (
+                      <div key={i} className="border border-gray-200 rounded-lg p-2 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <input className="input text-sm flex-1" value={x.nome} onChange={e => editarBatch(i, { nome: e.target.value })} placeholder="Nome" />
+                          <button onClick={() => removerBatch(i)} className="text-gray-300 hover:text-red-500 shrink-0"><X className="w-4 h-4" /></button>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input type="number" min="0" step="0.001" className="input text-sm w-20" value={x.medida} onChange={e => editarBatch(i, { medida: e.target.value })} placeholder="Medida" />
+                          <select className="input text-sm w-16" value={x.unidadeMedida} onChange={e => editarBatch(i, { unidadeMedida: e.target.value })}>
+                            {UNIDADES_MEDIDA.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                          <select className="input text-sm w-16" value={x.unidade} onChange={e => editarBatch(i, { unidade: e.target.value })}>
+                            {UNIDADES_PORCIONADO.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                          <button onClick={() => setPickerBatch({ idx: i })} className={`text-xs underline ml-auto truncate ${insumo ? 'text-green-700' : 'text-gray-500'}`}>
+                            {insumo ? `✓ ${insumo.nome}` : 'criar insumo'}
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                  {porcionadosFoto.length === 0 && (
+                    <p className="text-sm text-gray-400 text-center py-2">Nenhum item. Toque em "+ adicionar".</p>
+                  )}
+                </div>
+                <button onClick={criarBatch} disabled={criandoBatch} className="btn-primary w-full disabled:opacity-50">
+                  {criandoBatch ? 'Criando...' : `Criar ${porcionadosFoto.filter(x => x.nome.trim() && parseFloat(String(x.medida).replace(',', '.')) > 0).length} porcionado(s)`}
+                </button>
+              </div>
+            )}
+
+            {!ehPorcionado && resultadoFoto && (
               <div className="space-y-3">
                 <p className="text-xs text-gray-500">Revise e ajuste o que a IA leu antes de criar a ficha.</p>
 
@@ -571,6 +842,17 @@ export function FichasTecnicas() {
                 }}
               />
             )}
+
+            {/* Seletor de insumo de uma linha do batch de porcionados */}
+            {pickerBatch && (
+              <SeletorProduto
+                titulo="Insumo do porcionado"
+                produtos={produtos}
+                onEscolher={p => { editarBatch(pickerBatch.idx, { insumoId: p.id }); setPickerBatch(null) }}
+                onClose={() => setPickerBatch(null)}
+                opcaoExtra={{ label: '+ Criar pelo nome digitado', onEscolher: () => { editarBatch(pickerBatch.idx, { insumoId: null }); setPickerBatch(null) } }}
+              />
+            )}
           </div>
         </Modal>
       )}
@@ -578,42 +860,107 @@ export function FichasTecnicas() {
   )
 }
 
-function DetalheIngredientes({ ficha, custoUnit }) {
+function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes = [] }) {
   const produtos = useProdutos()
   const ingredientes = useFichaIngredientes(ficha.id)
-  const [form, setForm] = useState({ produtoId: '', quantidade: '' })
+  const [form, setForm] = useState({ produtoId: '', quantidade: '', altId: '', quantidadeAlt: '' })
   const [lotes, setLotes] = useState('')
   const [produzindo, setProduzindo] = useState(false)
   const [pickerAberto, setPickerAberto] = useState(false)
+  const [pickerAlt, setPickerAlt] = useState(false)
+  const [reservaAberta, setReservaAberta] = useState(false)
+  const [sugestaoRaw, setSugestaoRaw] = useState(null) // { altId, rawPorPacote }
+  const [aviso, setAviso] = useState(null) // lista de insumos que vão cair no cru
   const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
+  const altSel = produtos.find(p => p.id === parseInt(form.altId))
 
-  const ehProducao = ficha.tipo_ficha === 'producao'
+  const ehPorcionado = ficha.tipo_ficha === 'porcionado'
+  const ehProducao = ficha.tipo_ficha === 'producao' || ehPorcionado
+  const mostrarReserva = ficha.tipo_ficha === 'producao' // o "OU" é só na Produção
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
 
   // Custo total dos insumos desta ficha (resolve produtos de produção também)
   const custoTotal = ingredientes.reduce((s, ing) => s + (ing.quantidade || 0) * (custoUnit ? custoUnit(ing.produto_id) : 0), 0)
   const custoPorUnidade = ehProducao && ficha.rendimento > 0 ? custoTotal / ficha.rendimento : 0
 
+  // Ao escolher o insumo principal: se for um PORCIONADO, sugere o cru como
+  // reserva (achando a ficha do porcionado e o seu insumo cru).
+  function escolherPrincipal(p) {
+    setForm(f => ({ ...f, produtoId: String(p.id) }))
+    setPickerAberto(false)
+    const fp = fichas.find(x => x.tipo_ficha === 'porcionado' && x.produto_saida_id === p.id)
+    const ingRaw = fp ? todosIngredientes.find(i => i.ficha_id === fp.id) : null
+    if (ingRaw) {
+      setSugestaoRaw({ altId: ingRaw.produto_id, rawPorPacote: ingRaw.quantidade || 0 })
+      setReservaAberta(true)
+      setForm(f => ({ ...f, altId: String(ingRaw.produto_id) }))
+    } else {
+      setSugestaoRaw(null)
+    }
+  }
+
+  function mudarQuantidade(v) {
+    setForm(f => {
+      const next = { ...f, quantidade: v }
+      if (sugestaoRaw && String(f.altId) === String(sugestaoRaw.altId)) {
+        const q = parseFloat(String(v).replace(',', '.')) || 0
+        next.quantidadeAlt = q ? String(Math.round(q * sugestaoRaw.rawPorPacote * 1000) / 1000) : ''
+      }
+      return next
+    })
+  }
+
   async function adicionar() {
     if (!form.produtoId || !form.quantidade) return toast.error('Preencha produto e quantidade')
     const existe = ingredientes.find(i => i.produto_id === parseInt(form.produtoId))
     if (existe) return toast.error('Ingrediente já adicionado')
-    const { error } = await supabase.from('ficha_ingredientes').insert({
+    const insert = {
       ficha_id: ficha.id,
       produto_id: parseInt(form.produtoId),
       quantidade: parseFloat(form.quantidade),
-    })
+    }
+    if (mostrarReserva && form.altId && form.quantidadeAlt) {
+      insert.produto_alt_id = parseInt(form.altId)
+      insert.quantidade_alt = parseFloat(String(form.quantidadeAlt).replace(',', '.'))
+    }
+    const { error } = await supabase.from('ficha_ingredientes').insert(insert)
     if (error) return toast.error(error.message)
-    setForm({ produtoId: '', quantidade: '' })
-    toast.success('Ingrediente adicionado!')
+    setForm({ produtoId: '', quantidade: '', altId: '', quantidadeAlt: '' })
+    setSugestaoRaw(null); setReservaAberta(false)
+    toast.success('Insumo adicionado!')
   }
 
   async function remover(id) {
     await supabase.from('ficha_ingredientes').delete().eq('id', id)
   }
 
+  // Quais insumos com reserva vão cair no cru (porcionado insuficiente)?
+  function planejarFallback() {
+    const n = parseFloat(lotes) || 0
+    if (!n) return []
+    return ingredientes.filter(i => i.produto_alt_id).map(i => {
+      const prim = produtos.find(p => p.id === i.produto_id)
+      const precisa = (i.quantidade || 0) * n
+      if ((prim?.quantidade || 0) < precisa) {
+        const alt = produtos.find(p => p.id === i.produto_alt_id)
+        return {
+          primNome: prim?.nome || 'Porcionado', tem: prim?.quantidade || 0, primUn: prim?.unidade || '',
+          precisa, altNome: alt?.nome || 'Cru', altQtd: (i.quantidade_alt || 0) * n, altUn: alt?.unidade || '',
+        }
+      }
+      return null
+    }).filter(Boolean)
+  }
+
   async function produzir() {
     if (ingredientes.length === 0) return toast.error('Adicione os insumos antes de produzir')
+    const fallback = planejarFallback()
+    if (fallback.length > 0) { setAviso(fallback); return }
+    await executarProducao()
+  }
+
+  async function executarProducao() {
+    setAviso(null)
     setProduzindo(true)
     try {
       const gerado = await registrarProducao(ficha.id, lotes)
@@ -640,15 +987,17 @@ function DetalheIngredientes({ ficha, custoUnit }) {
         <div className="mb-4 bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
           <p className="text-sm text-gray-700">
             Gera <strong>{prodGerado?.nome || '—'}</strong>
-            {ficha.rendimento ? <> — rende <strong>{ficha.rendimento} {prodGerado?.unidade || ''}</strong> por lote</> : ' — defina o rendimento'}
+            {ehPorcionado
+              ? <> — <strong>1 {prodGerado?.unidade || 'pct'}</strong> por produção</>
+              : ficha.rendimento ? <> — rende <strong>{ficha.rendimento} {prodGerado?.unidade || ''}</strong> por lote</> : ' — defina o rendimento'}
           </p>
           <p className="text-sm text-gray-700">
-            Custo por lote: <strong className="text-gray-800">{formatBRL(custoTotal)}</strong>
-            {ficha.rendimento > 0 && <> · por {prodGerado?.unidade || 'un'}: <strong className="text-gray-800">{formatBRL(custoPorUnidade)}</strong></>}
+            Custo por {ehPorcionado ? (prodGerado?.unidade || 'pct') : 'lote'}: <strong className="text-gray-800">{formatBRL(ehPorcionado ? custoPorUnidade : custoTotal)}</strong>
+            {!ehPorcionado && ficha.rendimento > 0 && <> · por {prodGerado?.unidade || 'un'}: <strong className="text-gray-800">{formatBRL(custoPorUnidade)}</strong></>}
           </p>
           <div className="flex gap-2 items-end">
             <div>
-              <label className="label">Lotes a produzir</label>
+              <label className="label">{ehPorcionado ? 'Quantos pacotes produzir' : 'Lotes a produzir'}</label>
               <input type="number" min="1" step="1" className="input w-28" placeholder="Ex: 1" value={lotes} onChange={e => setLotes(e.target.value)} />
             </div>
             <button onClick={produzir} disabled={produzindo} className="btn-primary disabled:opacity-50">
@@ -659,21 +1008,42 @@ function DetalheIngredientes({ ficha, custoUnit }) {
         </div>
       )}
 
-      <div className="flex gap-2 mb-4 flex-wrap">
-        <button
-          onClick={() => setPickerAberto(true)}
-          className={`input flex-1 min-w-40 text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
-        >
-          {produtoSel ? `${produtoSel.nome} (${produtoSel.unidade})` : `Selecionar ${ehProducao ? 'insumo' : 'produto'}...`}
-        </button>
-        <input
-          type="number" min="0.001" step="0.001"
-          placeholder="Quantidade"
-          className="input w-32"
-          value={form.quantidade}
-          onChange={e => setForm(f => ({ ...f, quantidade: e.target.value }))}
-        />
-        <button onClick={adicionar} className="btn-primary">Adicionar</button>
+      <div className="space-y-2 mb-4">
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setPickerAberto(true)}
+            className={`input flex-1 min-w-40 text-left ${produtoSel ? 'text-gray-800' : 'text-gray-400'}`}
+          >
+            {produtoSel ? `${produtoSel.nome} (${produtoSel.unidade})` : `Selecionar ${ehProducao ? 'insumo' : 'produto'}...`}
+          </button>
+          <input
+            type="number" min="0.001" step="0.001"
+            placeholder="Quantidade"
+            className="input w-32"
+            value={form.quantidade}
+            onChange={e => mudarQuantidade(e.target.value)}
+          />
+          <button onClick={adicionar} className="btn-primary">Adicionar</button>
+        </div>
+
+        {/* Reserva (OU): usa o cru se faltar o porcionado — só na Produção */}
+        {mostrarReserva && (!reservaAberta && !form.altId ? (
+          <button onClick={() => setReservaAberta(true)} className="text-xs text-red-700 underline">
+            + adicionar reserva (OU cru, se faltar o porcionado)
+          </button>
+        ) : (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-1">
+            <p className="text-xs text-amber-800 font-medium">OU — usa o cru se faltar o porcionado</p>
+            <div className="flex gap-2 flex-wrap items-center">
+              <button onClick={() => setPickerAlt(true)} className={`input flex-1 min-w-40 text-left text-sm ${altSel ? 'text-gray-800' : 'text-gray-400'}`}>
+                {altSel ? `${altSel.nome} (${altSel.unidade})` : 'Selecionar produto cru...'}
+              </button>
+              <input type="number" min="0.001" step="0.001" placeholder="Qtd cru" className="input w-24 text-sm"
+                value={form.quantidadeAlt} onChange={e => setForm(f => ({ ...f, quantidadeAlt: e.target.value }))} />
+              <button onClick={() => { setForm(f => ({ ...f, altId: '', quantidadeAlt: '' })); setReservaAberta(false); setSugestaoRaw(null) }} className="text-xs text-gray-400 underline">remover</button>
+            </div>
+          </div>
+        ))}
       </div>
 
       {pickerAberto && (
@@ -681,8 +1051,17 @@ function DetalheIngredientes({ ficha, custoUnit }) {
           titulo={`Selecionar ${ehProducao ? 'insumo' : 'produto'}`}
           produtos={produtos}
           excluirIds={ingredientes.map(i => i.produto_id)}
-          onEscolher={p => { setForm(f => ({ ...f, produtoId: String(p.id) })); setPickerAberto(false) }}
+          onEscolher={escolherPrincipal}
           onClose={() => setPickerAberto(false)}
+        />
+      )}
+      {pickerAlt && (
+        <SeletorProduto
+          titulo="Produto cru (reserva)"
+          produtos={produtos}
+          excluirIds={[parseInt(form.produtoId)].filter(Boolean)}
+          onEscolher={p => { setForm(f => ({ ...f, altId: String(p.id) })); setPickerAlt(false) }}
+          onClose={() => setPickerAlt(false)}
         />
       )}
 
@@ -700,13 +1079,17 @@ function DetalheIngredientes({ ficha, custoUnit }) {
           <tbody>
             {ingredientes.map(ing => {
               const prod = produtos.find(p => p.id === ing.produto_id)
+              const alt = ing.produto_alt_id ? produtos.find(p => p.id === ing.produto_alt_id) : null
               return (
                 <tr key={ing.id} className="border-t border-gray-100">
-                  <td className="px-3 py-2 text-gray-700">{prod?.nome ?? 'Produto removido'}</td>
-                  <td className="px-3 py-2 text-right font-mono">
+                  <td className="px-3 py-2 text-gray-700">
+                    {prod?.nome ?? 'Produto removido'}
+                    {alt && <span className="block text-xs text-amber-700">↳ OU: {alt.nome} — {ing.quantidade_alt} {alt.unidade}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono align-top">
                     {ing.quantidade} <span className="text-gray-400 text-xs">{prod?.unidade}</span>
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-3 py-2 text-right align-top">
                     <button onClick={() => remover(ing.id)} className="text-red-400 hover:text-red-600 text-xs">Remover</button>
                   </td>
                 </tr>
@@ -714,6 +1097,29 @@ function DetalheIngredientes({ ficha, custoUnit }) {
             })}
           </tbody>
         </table>
+      )}
+
+      {aviso && (
+        <Modal title="Atenção — vai usar o cru" onClose={() => setAviso(null)}>
+          <div className="space-y-4">
+            <div className="flex gap-2 bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <span className="text-amber-600">⚠️</span>
+              <p className="text-sm text-amber-800">Não há <strong>porcionado</strong> suficiente. Estes serão consumidos do <strong>cru</strong>:</p>
+            </div>
+            <div className="space-y-1 max-h-60 overflow-y-auto">
+              {aviso.map((a, i) => (
+                <div key={i} className="text-sm border-b border-gray-100 py-1.5">
+                  <p className="text-gray-700"><strong>{a.primNome}</strong> — tem {a.tem} {a.primUn}, precisa {a.precisa} {a.primUn}</p>
+                  <p className="text-xs text-amber-700">→ usará {a.altQtd} {a.altUn} de {a.altNome}</p>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setAviso(null)} className="btn-secondary flex-1">Voltar</button>
+              <button onClick={executarProducao} disabled={produzindo} className="btn-primary flex-1">Produzir mesmo assim</button>
+            </div>
+          </div>
+        </Modal>
       )}
     </div>
   )

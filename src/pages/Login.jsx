@@ -1,7 +1,43 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
+import { Eye, EyeOff } from 'lucide-react'
 import toast from 'react-hot-toast'
+
+// Campo de senha com botão "olhinho" para mostrar/ocultar.
+function CampoSenha({ value, onChange, placeholder, minLength }) {
+  const [mostrar, setMostrar] = useState(false)
+  return (
+    <div className="relative">
+      <input
+        type={mostrar ? 'text' : 'password'}
+        className="input pr-10"
+        placeholder={placeholder}
+        value={value}
+        onChange={onChange}
+        minLength={minLength}
+        required
+      />
+      <button
+        type="button"
+        onClick={() => setMostrar(m => !m)}
+        tabIndex={-1}
+        aria-label={mostrar ? 'Ocultar senha' : 'Mostrar senha'}
+        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+      >
+        {mostrar ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+      </button>
+    </div>
+  )
+}
+
+// Mensagem amigável para erros de login.
+function mensagemLogin(msg) {
+  const m = (msg || '').toLowerCase()
+  if (m.includes('invalid login') || m.includes('credentials')) return 'E-mail ou senha incorretos.'
+  if (m.includes('email not confirmed')) return 'E-mail ainda não confirmado.'
+  return msg || 'Não foi possível entrar.'
+}
 
 export function Login() {
   const { login, registrar, criarOrganizacao, entrarPorConvite, user } = useAuth()
@@ -14,6 +50,7 @@ export function Login() {
   const [nome, setNome] = useState('')
   const [nomeOrg, setNomeOrg] = useState('')
   const [token, setToken] = useState('')
+  const [erroLogin, setErroLogin] = useState('')
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -33,12 +70,13 @@ export function Login() {
 
   async function handleLogin(e) {
     e.preventDefault()
+    setErroLogin('')
     setLoading(true)
     try {
       await login(email, senha)
       toast.success('Bem-vindo!')
     } catch (err) {
-      toast.error(err.message)
+      setErroLogin(mensagemLogin(err.message))
     } finally {
       setLoading(false)
     }
@@ -198,7 +236,7 @@ export function Login() {
                 </div>
                 <div>
                   <label className="label">Senha</label>
-                  <input type="password" className="input" placeholder={conviteAuth === 'registro' ? 'Mínimo 6 caracteres' : 'Sua senha'} value={senha} onChange={e => setSenha(e.target.value)} minLength={conviteAuth === 'registro' ? 6 : undefined} required />
+                  <CampoSenha placeholder={conviteAuth === 'registro' ? 'Mínimo 6 caracteres' : 'Sua senha'} value={senha} onChange={e => setSenha(e.target.value)} minLength={conviteAuth === 'registro' ? 6 : undefined} />
                 </div>
                 <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
                   {loading ? 'Aguarde...' : (conviteAuth === 'registro' ? 'Criar conta e entrar' : 'Entrar na Equipe')}
@@ -235,13 +273,13 @@ export function Login() {
             <>
               <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
                 <button
-                  onClick={() => setModo('login')}
+                  onClick={() => { setModo('login'); setErroLogin('') }}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'login' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
                 >
                   Entrar
                 </button>
                 <button
-                  onClick={() => setModo('registro')}
+                  onClick={() => { setModo('registro'); setErroLogin('') }}
                   className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all ${modo === 'registro' ? 'bg-white shadow text-gray-800' : 'text-gray-500'}`}
                 >
                   Criar Conta
@@ -252,12 +290,15 @@ export function Login() {
                 <form onSubmit={handleLogin} className="space-y-3">
                   <div>
                     <label className="label">E-mail</label>
-                    <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => setEmail(e.target.value)} required />
+                    <input type="email" className="input" placeholder="seu@email.com" value={email} onChange={e => { setEmail(e.target.value); setErroLogin('') }} required />
                   </div>
                   <div>
                     <label className="label">Senha</label>
-                    <input type="password" className="input" placeholder="Sua senha" value={senha} onChange={e => setSenha(e.target.value)} required />
+                    <CampoSenha placeholder="Sua senha" value={senha} onChange={e => { setSenha(e.target.value); setErroLogin('') }} />
                   </div>
+                  {erroLogin && (
+                    <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{erroLogin}</p>
+                  )}
                   <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
                     {loading ? 'Aguarde...' : 'Entrar'}
                   </button>
@@ -279,7 +320,7 @@ export function Login() {
                   </div>
                   <div>
                     <label className="label">Senha</label>
-                    <input type="password" className="input" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} minLength={6} required />
+                    <CampoSenha placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} minLength={6} />
                   </div>
                   <button type="submit" disabled={loading} className="btn-primary w-full disabled:opacity-50">
                     {loading ? 'Aguarde...' : 'Criar Conta'}
