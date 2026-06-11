@@ -70,7 +70,7 @@ export async function analisarImagemEstoque(imageBase64, mimeType, produtos, fic
         ]
       }
     ],
-    max_tokens: 8192,
+    max_tokens: 4096,
     temperature: 0.1,
     response_format: { type: 'json_object' },
   }
@@ -318,7 +318,7 @@ Retorne SOMENTE este JSON:
         ]
       }
     ],
-    max_tokens: 8192,
+    max_tokens: 4096,
     temperature: 0.1,
     response_format: { type: 'json_object' },
   }
