@@ -38,6 +38,7 @@ export function FichasTecnicas() {
   const [detalhe, setDetalhe] = useState(null)
   const [form, setForm] = useState(VAZIO_PRATO)
   const [busca, setBusca] = useState('')
+  const [filtroCategoria, setFiltroCategoria] = useState('') // só na aba Pratos
   const [modalFoto, setModalFoto] = useState(false)
   const [fotoAnalise, setFotoAnalise] = useState(null)
   const [analisando, setAnalisando] = useState(false)
@@ -353,12 +354,14 @@ export function FichasTecnicas() {
 
   const filtradas = fichas.filter(f =>
     (f.tipo_ficha || 'prato') === aba &&
-    f.nome.toLowerCase().includes(busca.toLowerCase())
+    f.nome.toLowerCase().includes(busca.toLowerCase()) &&
+    (aba !== 'prato' || !filtroCategoria || f.categoria === filtroCategoria)
   )
 
   function trocarAba(novaAba) {
     setAba(novaAba)
     setDetalhe(null)
+    setFiltroCategoria('')
   }
 
   function abrirNovo() {
@@ -523,12 +526,20 @@ export function FichasTecnicas() {
             : 'Receitas de pratos vendidos: ao registrar a venda, consomem os ingredientes do estoque.'}
       </p>
 
-      <input
-        placeholder="Buscar ficha..."
-        value={busca}
-        onChange={e => setBusca(e.target.value)}
-        className="input w-full"
-      />
+      <div className="flex gap-2">
+        <input
+          placeholder="Buscar ficha..."
+          value={busca}
+          onChange={e => setBusca(e.target.value)}
+          className="input flex-1 min-w-0"
+        />
+        {aba === 'prato' && (
+          <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)} className="input w-auto">
+            <option value="">Todas categorias</option>
+            {CATEGORIAS.map(c => <option key={c}>{c}</option>)}
+          </select>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {filtradas.map(f => {
@@ -871,6 +882,8 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
   const [reservaAberta, setReservaAberta] = useState(false)
   const [sugestaoRaw, setSugestaoRaw] = useState(null) // { altId, rawPorPacote }
   const [aviso, setAviso] = useState(null) // lista de insumos que vão cair no cru
+  const [editId, setEditId] = useState(null) // id do insumo em edição inline
+  const [editForm, setEditForm] = useState({ quantidade: '', unidade: '', quantidadeAlt: '' })
   const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
   const altSel = produtos.find(p => p.id === parseInt(form.altId))
 
@@ -932,6 +945,46 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
 
   async function remover(id) {
     await supabase.from('ficha_ingredientes').delete().eq('id', id)
+  }
+
+  // --- Edição inline de um insumo (quantidade / unidade de entrada / qtd do cru) ---
+  // A unidade exibida é sempre a do produto; o seletor permite digitar em outra
+  // unidade de peso/volume e converte para a do produto ao salvar.
+  function iniciarEdicao(ing) {
+    const prod = produtos.find(p => p.id === ing.produto_id)
+    setEditForm({
+      quantidade: String(ing.quantidade ?? ''),
+      unidade: prod?.unidade || 'un',
+      quantidadeAlt: ing.quantidade_alt != null ? String(ing.quantidade_alt) : '',
+    })
+    setEditId(ing.id)
+  }
+
+  function cancelarEdicao() { setEditId(null) }
+
+  // Troca a unidade de entrada e reconverte o número para manter a equivalência.
+  function mudarUnidadeEdicao(nova) {
+    setEditForm(f => {
+      const atual = parseFloat(String(f.quantidade).replace(',', '.'))
+      if (isNaN(atual)) return { ...f, unidade: nova }
+      return { ...f, unidade: nova, quantidade: String(converterParaUnidadeProduto(atual, f.unidade, nova)) }
+    })
+  }
+
+  async function salvarEdicao(ing) {
+    const prod = produtos.find(p => p.id === ing.produto_id)
+    const prodUn = prod?.unidade || 'un'
+    const valor = parseFloat(String(editForm.quantidade).replace(',', '.'))
+    if (isNaN(valor) || valor < 0) return toast.error('Informe uma quantidade válida')
+    const update = { quantidade: converterParaUnidadeProduto(valor, editForm.unidade, prodUn) }
+    if (ing.produto_alt_id) {
+      const va = parseFloat(String(editForm.quantidadeAlt).replace(',', '.'))
+      if (!isNaN(va) && va >= 0) update.quantidade_alt = va
+    }
+    const { error } = await supabase.from('ficha_ingredientes').update(update).eq('id', ing.id)
+    if (error) return toast.error(error.message)
+    setEditId(null)
+    toast.success('Insumo atualizado!')
   }
 
   // Quais insumos com reserva vão cair no cru (porcionado insuficiente)?
@@ -1080,6 +1133,52 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
             {ingredientes.map(ing => {
               const prod = produtos.find(p => p.id === ing.produto_id)
               const alt = ing.produto_alt_id ? produtos.find(p => p.id === ing.produto_alt_id) : null
+
+              if (editId === ing.id) {
+                const prodUn = prod?.unidade || 'un'
+                const podeConverter = UNIDADES_MEDIDA.includes(prodUn)
+                return (
+                  <tr key={ing.id} className="border-t border-gray-100 bg-amber-50/50">
+                    <td colSpan={3} className="px-3 py-3">
+                      <p className="text-sm font-medium text-gray-700 mb-2">{prod?.nome ?? 'Produto removido'}</p>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="number" min="0" step="0.001" inputMode="decimal" autoFocus
+                          className="input text-sm w-28"
+                          value={editForm.quantidade}
+                          onChange={e => setEditForm(f => ({ ...f, quantidade: e.target.value }))}
+                          placeholder="Qtd"
+                        />
+                        {podeConverter ? (
+                          <select className="input text-sm w-20" value={editForm.unidade} onChange={e => mudarUnidadeEdicao(e.target.value)}>
+                            {UNIDADES_MEDIDA.map(u => <option key={u} value={u}>{u}</option>)}
+                          </select>
+                        ) : (
+                          <span className="text-sm text-gray-500">{prodUn}</span>
+                        )}
+                      </div>
+                      {alt && (
+                        <div className="flex items-center gap-2 mt-2">
+                          <span className="text-xs text-amber-700">OU {alt.nome}:</span>
+                          <input
+                            type="number" min="0" step="0.001" inputMode="decimal"
+                            className="input text-sm w-24"
+                            value={editForm.quantidadeAlt}
+                            onChange={e => setEditForm(f => ({ ...f, quantidadeAlt: e.target.value }))}
+                            placeholder="Qtd cru"
+                          />
+                          <span className="text-xs text-gray-500">{alt.unidade}</span>
+                        </div>
+                      )}
+                      <div className="flex gap-2 mt-3">
+                        <button onClick={() => salvarEdicao(ing)} className="btn-primary text-xs px-3 py-1.5">Salvar</button>
+                        <button onClick={cancelarEdicao} className="btn-secondary text-xs px-3 py-1.5">Cancelar</button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              }
+
               return (
                 <tr key={ing.id} className="border-t border-gray-100">
                   <td className="px-3 py-2 text-gray-700">
@@ -1089,7 +1188,8 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
                   <td className="px-3 py-2 text-right font-mono align-top">
                     {ing.quantidade} <span className="text-gray-400 text-xs">{prod?.unidade}</span>
                   </td>
-                  <td className="px-3 py-2 text-right align-top">
+                  <td className="px-3 py-2 text-right align-top whitespace-nowrap">
+                    <button onClick={() => iniciarEdicao(ing)} className="text-blue-400 hover:text-blue-600 text-xs mr-2">Editar</button>
                     <button onClick={() => remover(ing.id)} className="text-red-400 hover:text-red-600 text-xs">Remover</button>
                   </td>
                 </tr>
