@@ -116,13 +116,22 @@ create policy "atualizar membro" on membros
 create policy "remover membro" on membros
   for delete using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid() and papel = 'dono'));
 
--- Convites: ver (qualquer autenticado para validar), criar (dono), usar (atualizar)
+-- Convites: a RPC entrar_por_convite é SECURITY DEFINER (ignora RLS), então ela
+-- lê o token e marca usado=true por dentro. O cliente NUNCA faz select/update
+-- direto em convites — só o INSERT do dono. Por isso:
+--   - SELECT é escopado à própria org (evita enumeração de tokens entre orgs);
+--   - não há policy de UPDATE (a RPC definer cuida do usado=true);
+--   - INSERT continua restrito ao dono.
 create policy "ver convites" on convites
-  for select using (auth.uid() is not null);
+  for select using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid()));
 create policy "criar convite" on convites
   for insert with check (organizacao_id in (select organizacao_id from membros where user_id = auth.uid() and papel = 'dono'));
-create policy "usar convite" on convites
-  for update using (auth.uid() is not null);
+
+-- Migração (aplicada): apertar o RLS de convites em bancos já existentes —
+-- drop policy if exists "ver convites" on convites;
+-- create policy "ver convites" on convites
+--   for select using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid()));
+-- drop policy if exists "usar convite" on convites;
 
 -- Produtos
 create policy "ver produtos" on produtos

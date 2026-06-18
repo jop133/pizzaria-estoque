@@ -7,10 +7,13 @@ export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') 
 
   // select * para incluir, se existirem, as colunas da reserva "OU"
   // (produto_alt_id / quantidade_alt) — antes da migração ficam ausentes.
-  const { data: ingredientes } = await supabase
+  const { data: ingredientes, error: errIng } = await supabase
     .from('ficha_ingredientes')
     .select('*')
     .eq('ficha_id', fichaId)
+  // Guard ANTES de qualquer escrita: se a leitura falhar, abortamos sem
+  // registrar a saída — senão gravaríamos um lançamento que não baixou nada.
+  if (errIng) throw new Error('Erro ao ler os insumos da ficha: ' + errIng.message)
 
   for (const ing of ingredientes || []) {
     const primNec = (ing.quantidade || 0) * quantidade
@@ -28,13 +31,17 @@ export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') 
       estoqueFonte = alt?.quantidade
     }
     if (estoqueFonte == null) continue
-    await supabase
+    // best-effort por item: a atomicidade total fica para a futura RPC. Se um
+    // update falhar, registramos e seguimos — abortar no meio deixaria baixas
+    // parciais sem lançamento (irreversível), pior que o estado atual.
+    const { error: errUpd } = await supabase
       .from('produtos')
       .update({ quantidade: Math.max(0, estoqueFonte - fonteQtd) })
       .eq('id', fonteId)
+    if (errUpd) console.warn('[estoque] falha ao baixar produto', fonteId, errUpd.message)
   }
 
-  await supabase.from('lancamentos').insert({
+  const { error: errLanc } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo: 'saida_ficha',
     ficha_id: fichaId,
@@ -42,25 +49,28 @@ export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') 
     observacao,
     user_id: session.userId,
   })
+  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
 }
 
 export async function registrarSaidaManual(produtoId, quantidade, observacao = '') {
   const orgId = session.organizacaoId
   if (!orgId) throw new Error('Sem organização ativa')
 
-  const { data: prod } = await supabase
+  const { data: prod, error: errProd } = await supabase
     .from('produtos')
     .select('quantidade')
     .eq('id', produtoId)
     .single()
+  if (errProd) throw new Error('Erro ao ler o produto: ' + errProd.message)
   if (!prod) throw new Error('Produto não encontrado')
 
-  await supabase
+  const { error: errUpd } = await supabase
     .from('produtos')
     .update({ quantidade: Math.max(0, prod.quantidade - quantidade) })
     .eq('id', produtoId)
+  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
 
-  await supabase.from('lancamentos').insert({
+  const { error: errLanc } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo: 'saida_manual',
     produto_id: produtoId,
@@ -68,6 +78,7 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
     observacao,
     user_id: session.userId,
   })
+  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
 }
 
 // Registra um evento de cadastro/auditoria no histórico (não mexe no estoque).
@@ -75,7 +86,7 @@ export async function registrarSaidaManual(produtoId, quantidade, observacao = '
 export async function registrarEvento(tipo, { produtoId = null, fichaId = null, nome = '' } = {}) {
   const orgId = session.organizacaoId
   if (!orgId) return
-  await supabase.from('lancamentos').insert({
+  const { error } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo,
     produto_id: produtoId,
@@ -84,21 +95,31 @@ export async function registrarEvento(tipo, { produtoId = null, fichaId = null, 
     observacao: nome,
     user_id: session.userId,
   })
+  // Auditoria é best-effort: uma falha aqui não deve derrubar a operação
+  // principal (cadastro/edição). Apenas registramos no console.
+  if (error) console.warn('[estoque] falha ao registrar evento', tipo, error.message)
 }
 
 // Ajusta o estoque de um produto por um delta (+ entra, − sai), nunca negativo.
+// Helper best-effort usado pela reversão: não lança para não abortar o loop de
+// reverterLancamento no meio (preserva o comportamento atual); só observa erros.
 async function ajustarEstoque(produtoId, delta) {
   if (!produtoId) return
-  const { data: prod } = await supabase.from('produtos').select('quantidade').eq('id', produtoId).single()
+  const { data: prod, error: errSel } = await supabase.from('produtos').select('quantidade').eq('id', produtoId).single()
+  if (errSel) { console.warn('[estoque] falha ao ler produto p/ reverter', produtoId, errSel.message); return }
   if (!prod) return
-  await supabase
+  const { error: errUpd } = await supabase
     .from('produtos')
     .update({ quantidade: Math.max(0, (prod.quantidade || 0) + delta) })
     .eq('id', produtoId)
+  if (errUpd) console.warn('[estoque] falha ao reverter produto', produtoId, errUpd.message)
 }
 
 // Reverte o efeito de um lançamento no estoque (usado ao excluí-lo do histórico).
 // Assume que nada mudou desde a ação; receitas usam a versão atual da ficha.
+// Best-effort: as leituras internas apenas observam erros (não lançam) para a
+// reversão seguir o mesmo comportamento de sempre. A reversão exata (snapshot)
+// é um item separado.
 export async function reverterLancamento(l) {
   if (!l) return
   const qtd = parseFloat(l.quantidade) || 0
@@ -109,8 +130,9 @@ export async function reverterLancamento(l) {
     await ajustarEstoque(l.produto_id, +qtd)
   } else if (l.tipo === 'saida_ficha') {
     if (l.ficha_id) {
-      const { data: ings } = await supabase
+      const { data: ings, error } = await supabase
         .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
+      if (error) console.warn('[estoque] falha ao ler insumos p/ reverter saída', error.message)
       for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * qtd)
     }
   } else if (l.tipo === 'producao') {
@@ -118,13 +140,15 @@ export async function reverterLancamento(l) {
     await ajustarEstoque(l.produto_id, -qtd)
     // devolve os insumos consumidos (recalcula os lotes pela receita atual)
     if (l.ficha_id) {
-      const { data: ficha } = await supabase
+      const { data: ficha, error: errFicha } = await supabase
         .from('fichas_tecnicas').select('rendimento').eq('id', l.ficha_id).single()
+      if (errFicha) console.warn('[estoque] falha ao ler ficha p/ reverter produção', errFicha.message)
       const rendimento = ficha?.rendimento
       if (rendimento && rendimento > 0) {
         const lotes = qtd / rendimento
-        const { data: ings } = await supabase
+        const { data: ings, error: errIng } = await supabase
           .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
+        if (errIng) console.warn('[estoque] falha ao ler insumos p/ reverter produção', errIng.message)
         for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * lotes)
       }
     }
@@ -146,11 +170,12 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
   const n = parseFloat(lotes)
   if (!n || n <= 0) throw new Error('Informe quantos lotes produzir')
 
-  const { data: ficha } = await supabase
+  const { data: ficha, error: errFicha } = await supabase
     .from('fichas_tecnicas')
     .select('nome, produto_saida_id, rendimento')
     .eq('id', fichaId)
     .single()
+  if (errFicha) throw new Error('Erro ao ler a ficha: ' + errFicha.message)
   if (!ficha) throw new Error('Ficha não encontrada')
   if (!ficha.produto_saida_id) throw new Error('Esta ficha de produção não tem um produto gerado definido')
   if (!ficha.rendimento || ficha.rendimento <= 0) throw new Error('Defina o rendimento da ficha de produção')
@@ -158,10 +183,11 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
   // Insumos da ficha (select * para incluir, quando existirem, as colunas da
   // alternativa "OU": produto_alt_id / quantidade_alt — antes da migração ficam
   // ausentes e o comportamento é o de sempre).
-  const { data: ingredientes } = await supabase
+  const { data: ingredientes, error: errIng } = await supabase
     .from('ficha_ingredientes')
     .select('*')
     .eq('ficha_id', fichaId)
+  if (errIng) throw new Error('Erro ao ler os insumos da ficha: ' + errIng.message)
 
   if (!ingredientes || ingredientes.length === 0) {
     throw new Error('Esta ficha de produção não tem insumos cadastrados')
@@ -169,10 +195,11 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
 
   // Carrega os produtos envolvidos (principais + alternativos) numa consulta.
   const ids = [...new Set(ingredientes.flatMap(i => [i.produto_id, i.produto_alt_id].filter(Boolean)))]
-  const { data: prods } = await supabase
+  const { data: prods, error: errProds } = await supabase
     .from('produtos')
     .select('id, nome, quantidade, unidade')
     .in('id', ids)
+  if (errProds) throw new Error('Erro ao ler os produtos: ' + errProds.message)
   const mapaProd = Object.fromEntries((prods || []).map(p => [p.id, p]))
 
   // Decide a fonte de cada insumo: prioriza o porcionado (produto_id); se não
@@ -207,30 +234,34 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
     throw new Error('Estoque insuficiente para produzir: ' + faltantes.join('; '))
   }
 
-  // Consome os insumos (já agregados por produto).
+  // Consome os insumos (já agregados por produto). best-effort por item: a
+  // atomicidade total fica para a futura RPC.
   for (const [id, nec] of Object.entries(necessarioPorProduto)) {
     const prod = mapaProd[id]
     if (!prod) continue
-    await supabase
+    const { error: errCons } = await supabase
       .from('produtos')
       .update({ quantidade: Math.max(0, prod.quantidade - nec) })
       .eq('id', parseInt(id))
+    if (errCons) console.warn('[estoque] falha ao consumir insumo', id, errCons.message)
   }
 
   // Adiciona o produto gerado
   const gerado = Math.round(ficha.rendimento * n * 1000) / 1000
-  const { data: saida } = await supabase
+  const { data: saida, error: errSaida } = await supabase
     .from('produtos')
     .select('quantidade')
     .eq('id', ficha.produto_saida_id)
     .single()
+  if (errSaida) throw new Error('Erro ao ler o produto gerado: ' + errSaida.message)
   if (!saida) throw new Error('Produto gerado não encontrado')
-  await supabase
+  const { error: errAdd } = await supabase
     .from('produtos')
     .update({ quantidade: saida.quantidade + gerado })
     .eq('id', ficha.produto_saida_id)
+  if (errAdd) throw new Error('Erro ao adicionar o produto gerado: ' + errAdd.message)
 
-  await supabase.from('lancamentos').insert({
+  const { error: errLanc } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo: 'producao',
     ficha_id: fichaId,
@@ -239,6 +270,7 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
     observacao: observacao || `Produção: ${n} lote(s) de ${ficha.nome}`,
     user_id: session.userId,
   })
+  if (errLanc) throw new Error('Erro ao registrar o lançamento de produção: ' + errLanc.message)
 
   return gerado
 }
@@ -249,11 +281,12 @@ export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = 
   const orgId = session.organizacaoId
   if (!orgId) throw new Error('Sem organização ativa')
 
-  const { data: prod } = await supabase
+  const { data: prod, error: errSel } = await supabase
     .from('produtos')
     .select('quantidade')
     .eq('id', produtoId)
     .single()
+  if (errSel) throw new Error('Erro ao ler o produto: ' + errSel.message)
   if (!prod) throw new Error('Produto não encontrado')
 
   const atual = prod.quantidade || 0
@@ -261,15 +294,16 @@ export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = 
   const delta = Math.round((contado - atual) * 1000) / 1000
   if (delta === 0) return // nada mudou, não registra
 
-  await supabase
+  const { error: errUpd } = await supabase
     .from('produtos')
     .update({ quantidade: contado })
     .eq('id', produtoId)
+  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
 
   const sinal = delta > 0 ? '+' : ''
   const obs = `Contagem: ${atual} → ${contado} (${sinal}${delta})` + (notaExtra ? ` · ${notaExtra}` : '')
 
-  await supabase.from('lancamentos').insert({
+  const { error: errLanc } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo: 'ajuste',
     produto_id: produtoId,
@@ -277,25 +311,28 @@ export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = 
     observacao: obs,
     user_id: session.userId,
   })
+  if (errLanc) throw new Error('Erro ao registrar o ajuste: ' + errLanc.message)
 }
 
 export async function registrarEntrada(produtoId, quantidade, observacao = '', marca = '') {
   const orgId = session.organizacaoId
   if (!orgId) throw new Error('Sem organização ativa')
 
-  const { data: prod } = await supabase
+  const { data: prod, error: errSel } = await supabase
     .from('produtos')
     .select('quantidade')
     .eq('id', produtoId)
     .single()
+  if (errSel) throw new Error('Erro ao ler o produto: ' + errSel.message)
   if (!prod) throw new Error('Produto não encontrado')
 
-  await supabase
+  const { error: errUpd } = await supabase
     .from('produtos')
     .update({ quantidade: prod.quantidade + quantidade })
     .eq('id', produtoId)
+  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
 
-  await supabase.from('lancamentos').insert({
+  const { error: errLanc } = await supabase.from('lancamentos').insert({
     organizacao_id: orgId,
     tipo: 'entrada',
     produto_id: produtoId,
@@ -304,4 +341,5 @@ export async function registrarEntrada(produtoId, quantidade, observacao = '', m
     marca: marca || null,
     user_id: session.userId,
   })
+  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
 }
