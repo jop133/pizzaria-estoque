@@ -104,17 +104,21 @@ alter table fichas_tecnicas enable row level security;
 alter table ficha_ingredientes enable row level security;
 alter table lancamentos enable row level security;
 
--- Organizações: ver e criar
+-- Organizações: só SELECT. NÃO há policy de INSERT — a criação é feita pela RPC
+-- criar_organizacao (SECURITY DEFINER). A antiga "criar org" (auth.uid() is not
+-- null) foi removida em jun/2026 (defesa em profundidade).
+-- migração: drop policy if exists "criar org" on organizacoes;
 create policy "ver minha org" on organizacoes
   for select using (id in (select organizacao_id from membros where user_id = auth.uid()));
-create policy "criar org" on organizacoes
-  for insert with check (auth.uid() is not null);
 
--- Membros: ver, inserir, atualizar, deletar
+-- Membros: ver, atualizar, deletar. NÃO há policy de INSERT — as inserções
+-- legítimas são feitas dentro das RPCs DEFINER (criar_organizacao /
+-- entrar_por_convite), que ignoram o RLS. A antiga "inserir membro"
+-- (auth.uid() is not null) deixava QUALQUER logado se inserir como dono de
+-- qualquer org (furo CRÍTICO de isolamento entre tenants) — removida jun/2026.
+-- migração: drop policy if exists "inserir membro" on membros;
 create policy "ver membros da org" on membros
   for select using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid()));
-create policy "inserir membro" on membros
-  for insert with check (auth.uid() is not null);
 create policy "atualizar membro" on membros
   for update using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid() and papel = 'dono'));
 create policy "remover membro" on membros
@@ -168,7 +172,8 @@ create policy "modificar lancamentos" on lancamentos
 -- vínculos e validar tokens). Já existiam no banco; documentadas aqui.
 
 create or replace function public.criar_organizacao(nome_org text, nome_usuario text)
-returns uuid language plpgsql security definer as $$
+returns uuid language plpgsql security definer
+set search_path = public, pg_temp as $$
 declare nova_org_id uuid; uid uuid;
 begin
   uid := auth.uid();
@@ -180,7 +185,8 @@ begin
 end; $$;
 
 create or replace function public.entrar_por_convite(convite_token text, nome_usuario text)
-returns uuid language plpgsql security definer as $$
+returns uuid language plpgsql security definer
+set search_path = public, pg_temp as $$
 declare conv record; uid uuid;
 begin
   uid := auth.uid();
@@ -195,7 +201,8 @@ begin
 end; $$;
 
 create or replace function public.excluir_organizacao(org_id uuid)
-returns void language plpgsql security definer as $$
+returns void language plpgsql security definer
+set search_path = public, pg_temp as $$
 begin
   if not exists (
     select 1 from membros where organizacao_id = org_id and user_id = auth.uid() and papel = 'dono'
