@@ -77,65 +77,12 @@ export async function registrarEvento(tipo, { produtoId = null, fichaId = null, 
   if (error) console.warn('[estoque] falha ao registrar evento', tipo, error.message)
 }
 
-// Ajusta o estoque de um produto por um delta (+ entra, − sai), nunca negativo.
-// Helper best-effort usado pela reversão: não lança para não abortar o loop de
-// reverterLancamento no meio (preserva o comportamento atual); só observa erros.
-// (A reversão atômica/exata é o item #2 — snapshot.)
-async function ajustarEstoque(produtoId, delta) {
-  if (!produtoId) return
-  const { data: prod, error: errSel } = await supabase.from('produtos').select('quantidade').eq('id', produtoId).single()
-  if (errSel) { console.warn('[estoque] falha ao ler produto p/ reverter', produtoId, errSel.message); return }
-  if (!prod) return
-  const { error: errUpd } = await supabase
-    .from('produtos')
-    .update({ quantidade: Math.max(0, (prod.quantidade || 0) + delta) })
-    .eq('id', produtoId)
-  if (errUpd) console.warn('[estoque] falha ao reverter produto', produtoId, errUpd.message)
-}
-
-// Reverte o efeito de um lançamento no estoque (usado ao excluí-lo do histórico).
-// Assume que nada mudou desde a ação; receitas usam a versão atual da ficha.
-// Best-effort: as leituras internas apenas observam erros (não lançam) para a
-// reversão seguir o mesmo comportamento de sempre. A reversão exata (snapshot)
-// é um item separado.
-export async function reverterLancamento(l) {
-  if (!l) return
-  const qtd = parseFloat(l.quantidade) || 0
-
-  if (l.tipo === 'entrada') {
-    await ajustarEstoque(l.produto_id, -qtd)
-  } else if (l.tipo === 'saida_manual') {
-    await ajustarEstoque(l.produto_id, +qtd)
-  } else if (l.tipo === 'saida_ficha') {
-    if (l.ficha_id) {
-      const { data: ings, error } = await supabase
-        .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
-      if (error) console.warn('[estoque] falha ao ler insumos p/ reverter saída', error.message)
-      for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * qtd)
-    }
-  } else if (l.tipo === 'producao') {
-    // remove o produto gerado
-    await ajustarEstoque(l.produto_id, -qtd)
-    // devolve os insumos consumidos (recalcula os lotes pela receita atual)
-    if (l.ficha_id) {
-      const { data: ficha, error: errFicha } = await supabase
-        .from('fichas_tecnicas').select('rendimento').eq('id', l.ficha_id).single()
-      if (errFicha) console.warn('[estoque] falha ao ler ficha p/ reverter produção', errFicha.message)
-      const rendimento = ficha?.rendimento
-      if (rendimento && rendimento > 0) {
-        const lotes = qtd / rendimento
-        const { data: ings, error: errIng } = await supabase
-          .from('ficha_ingredientes').select('produto_id, quantidade').eq('ficha_id', l.ficha_id)
-        if (errIng) console.warn('[estoque] falha ao ler insumos p/ reverter produção', errIng.message)
-        for (const ing of ings || []) await ajustarEstoque(ing.produto_id, +ing.quantidade * lotes)
-      }
-    }
-  } else if (l.tipo === 'ajuste') {
-    // desfaz a diferença aplicada, lida da observação "... (±Δ)"
-    const m = (l.observacao || '').match(/\(([+-]?\d+(?:[.,]\d+)?)\)/)
-    if (m) {
-      const delta = parseFloat(m[1].replace(',', '.'))
-      if (!isNaN(delta)) await ajustarEstoque(l.produto_id, -delta)
-    }
-  }
+// Exclui um lançamento do histórico, revertendo seu efeito no estoque numa
+// única transação (RPC excluir_lancamento). A reversão é EXATA: usa o snapshot
+// (coluna itens) do que foi realmente consumido — independe da ficha atual e
+// respeita a fonte efetiva da reserva "OU". Lançamentos antigos (sem snapshot)
+// caem no fallback dentro da RPC. Cadastros (produto_novo, ...) só são removidos.
+export async function excluirLancamento(id) {
+  const { error } = await supabase.rpc('excluir_lancamento', { p_id: id })
+  if (error) throw new Error(error.message)
 }

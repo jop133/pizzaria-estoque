@@ -85,7 +85,11 @@ create table if not exists lancamentos (
   produto_id bigint references produtos(id) on delete set null,
   quantidade numeric not null,
   observacao text default '',
-  user_id uuid references auth.users(id)
+  user_id uuid references auth.users(id),
+  -- snapshot do que foi REALMENTE aplicado por produto: [{"p":id,"d":delta}, ...]
+  -- (d = mudança real no estoque; + entrou, − saiu). Usado p/ reversão exata.
+  -- migração: alter table lancamentos add column if not exists itens jsonb;
+  itens jsonb
 );
 
 -- =============================================
@@ -215,20 +219,23 @@ begin
   select organizacao_id into v_org from produtos where id = p_produto_id;
   if v_org is null then raise exception 'Produto não encontrado'; end if;
   update produtos set quantidade = quantidade + p_quantidade where id = p_produto_id;
-  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, marca, user_id)
-    values (v_org, 'entrada', p_produto_id, p_quantidade, coalesce(p_observacao,''), nullif(p_marca,''), auth.uid());
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, marca, user_id, itens)
+    values (v_org, 'entrada', p_produto_id, p_quantidade, coalesce(p_observacao,''), nullif(p_marca,''), auth.uid(),
+            jsonb_build_array(jsonb_build_object('p', p_produto_id, 'd', p_quantidade)));
 end; $$;
 
 create or replace function public.lancar_saida_manual(
   p_produto_id bigint, p_quantidade numeric, p_observacao text default ''
 ) returns void language plpgsql security invoker as $$
-declare v_org uuid;
+declare v_org uuid; v_old numeric; v_new numeric;
 begin
-  select organizacao_id into v_org from produtos where id = p_produto_id;
+  select organizacao_id, quantidade into v_org, v_old from produtos where id = p_produto_id;
   if v_org is null then raise exception 'Produto não encontrado'; end if;
-  update produtos set quantidade = greatest(0, quantidade - p_quantidade) where id = p_produto_id;
-  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id)
-    values (v_org, 'saida_manual', p_produto_id, p_quantidade, coalesce(p_observacao,''), auth.uid());
+  update produtos set quantidade = greatest(0, quantidade - p_quantidade) where id = p_produto_id
+    returning quantidade into v_new;
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id, itens)
+    values (v_org, 'saida_manual', p_produto_id, p_quantidade, coalesce(p_observacao,''), auth.uid(),
+            jsonb_build_array(jsonb_build_object('p', p_produto_id, 'd', v_new - coalesce(v_old,0))));
 end; $$;
 
 create or replace function public.lancar_ajuste(
@@ -247,8 +254,9 @@ begin
   v_obs := 'Contagem: ' || trim_scale(v_atual) || ' → ' || trim_scale(v_contado)
            || ' (' || v_sinal || trim_scale(v_delta) || ')';
   if coalesce(p_nota_extra, '') <> '' then v_obs := v_obs || ' · ' || p_nota_extra; end if;
-  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id)
-    values (v_org, 'ajuste', p_produto_id, v_contado, v_obs, auth.uid());
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id, itens)
+    values (v_org, 'ajuste', p_produto_id, v_contado, v_obs, auth.uid(),
+            jsonb_build_array(jsonb_build_object('p', p_produto_id, 'd', v_delta)));
 end; $$;
 
 create or replace function public.lancar_saida_ficha(
@@ -257,6 +265,7 @@ create or replace function public.lancar_saida_ficha(
 declare
   v_org uuid; ing record;
   v_prim_nec numeric; v_fonte_id bigint; v_fonte_qtd numeric; v_estoque numeric; v_prim_estoque numeric;
+  v_new numeric; v_itens jsonb := '[]'::jsonb;
 begin
   select organizacao_id into v_org from fichas_tecnicas where id = p_ficha_id;
   if v_org is null then raise exception 'Ficha não encontrada'; end if;
@@ -277,11 +286,14 @@ begin
       v_fonte_qtd := coalesce(ing.quantidade_alt, 0) * p_quantidade;
     end if;
     if v_estoque is null then continue; end if;
-    update produtos set quantidade = greatest(0, v_estoque - v_fonte_qtd) where id = v_fonte_id;
+    update produtos set quantidade = greatest(0, v_estoque - v_fonte_qtd) where id = v_fonte_id
+      returning quantidade into v_new;
+    -- delta real (respeita o clamp): registra a fonte EFETIVA (porcionado ou cru).
+    v_itens := v_itens || jsonb_build_object('p', v_fonte_id, 'd', v_new - v_estoque);
   end loop;
 
-  insert into lancamentos (organizacao_id, tipo, ficha_id, quantidade, observacao, user_id)
-    values (v_org, 'saida_ficha', p_ficha_id, p_quantidade, coalesce(p_observacao,''), auth.uid());
+  insert into lancamentos (organizacao_id, tipo, ficha_id, quantidade, observacao, user_id, itens)
+    values (v_org, 'saida_ficha', p_ficha_id, p_quantidade, coalesce(p_observacao,''), auth.uid(), v_itens);
 end; $$;
 
 create or replace function public.lancar_producao(
@@ -343,10 +355,72 @@ begin
   v_gerado := round(v_rend * p_lotes, 3);
   update produtos set quantidade = quantidade + v_gerado where id = v_saida_id;
 
-  -- 5) Lançamento.
-  insert into lancamentos (organizacao_id, tipo, ficha_id, produto_id, quantidade, observacao, user_id)
+  -- 5) Snapshot: consumo (delta − por insumo, sem clamp pois a pré-checagem garante
+  --    estoque) + produto gerado (delta +). Registra a fonte EFETIVA da reserva "OU".
+  select coalesce(jsonb_agg(jsonb_build_object('p', (kv.key)::bigint, 'd', -(kv.value)::numeric)), '[]'::jsonb)
+    into v_itens from jsonb_each_text(v_nec) kv;
+  v_itens := v_itens || jsonb_build_object('p', v_saida_id, 'd', v_gerado);
+
+  -- 6) Lançamento.
+  insert into lancamentos (organizacao_id, tipo, ficha_id, produto_id, quantidade, observacao, user_id, itens)
     values (v_org, 'producao', p_ficha_id, v_saida_id, v_gerado,
             coalesce(nullif(p_observacao, ''), 'Produção: ' || trim_scale(p_lotes) || ' lote(s) de ' || v_nome),
-            auth.uid());
+            auth.uid(), v_itens);
   return v_gerado;
+end; $$;
+
+-- Reverte o efeito de um lançamento no estoque E o exclui, numa única transação.
+-- Caminho exato via snapshot (itens) quando disponível; senão, fallback com a
+-- lógica antiga (recalcula pela ficha atual / lê o (±Δ) da observação) para
+-- lançamentos criados antes do snapshot. Cadastros (produto_novo, ...) não têm
+-- efeito de estoque: apenas são removidos.
+create or replace function public.excluir_lancamento(p_id bigint)
+returns void language plpgsql security invoker as $$
+declare
+  v_lanc lancamentos; el jsonb; v_qtd numeric; v_rend numeric; v_lotes numeric; ing record;
+  v_match text; v_delta numeric;
+begin
+  select * into v_lanc from lancamentos where id = p_id;
+  if not found then raise exception 'Lançamento não encontrado'; end if;
+
+  if v_lanc.itens is not null then
+    -- Exato: aplica o inverso de cada delta gravado.
+    for el in select value from jsonb_array_elements(v_lanc.itens) loop
+      update produtos set quantidade = greatest(0, quantidade - (el->>'d')::numeric)
+        where id = (el->>'p')::bigint;
+    end loop;
+  else
+    -- Fallback p/ lançamentos antigos (pré-snapshot).
+    v_qtd := coalesce(v_lanc.quantidade, 0);
+    if v_lanc.tipo = 'entrada' then
+      update produtos set quantidade = greatest(0, quantidade - v_qtd) where id = v_lanc.produto_id;
+    elsif v_lanc.tipo = 'saida_manual' then
+      update produtos set quantidade = quantidade + v_qtd where id = v_lanc.produto_id;
+    elsif v_lanc.tipo = 'saida_ficha' then
+      if v_lanc.ficha_id is not null then
+        for ing in select produto_id, quantidade from ficha_ingredientes where ficha_id = v_lanc.ficha_id loop
+          update produtos set quantidade = quantidade + coalesce(ing.quantidade,0) * v_qtd where id = ing.produto_id;
+        end loop;
+      end if;
+    elsif v_lanc.tipo = 'producao' then
+      update produtos set quantidade = greatest(0, quantidade - v_qtd) where id = v_lanc.produto_id;
+      if v_lanc.ficha_id is not null then
+        select rendimento into v_rend from fichas_tecnicas where id = v_lanc.ficha_id;
+        if v_rend is not null and v_rend > 0 then
+          v_lotes := v_qtd / v_rend;
+          for ing in select produto_id, quantidade from ficha_ingredientes where ficha_id = v_lanc.ficha_id loop
+            update produtos set quantidade = quantidade + coalesce(ing.quantidade,0) * v_lotes where id = ing.produto_id;
+          end loop;
+        end if;
+      end if;
+    elsif v_lanc.tipo = 'ajuste' then
+      v_match := substring(coalesce(v_lanc.observacao,'') from '\(([+-]?[0-9]+(?:[.,][0-9]+)?)\)');
+      if v_match is not null then
+        v_delta := replace(v_match, ',', '.')::numeric;
+        update produtos set quantidade = greatest(0, quantidade - v_delta) where id = v_lanc.produto_id;
+      end if;
+    end if;
+  end if;
+
+  delete from lancamentos where id = p_id;
 end; $$;
