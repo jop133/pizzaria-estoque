@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useLancamentos } from '../hooks/useEstoque'
 import { useAuth } from '../contexts/AuthContext'
 import { exportarHistoricoCSV } from '../services/importExport'
-import { reverterLancamento } from '../services/estoque'
+import { excluirLancamento } from '../services/estoque'
 import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO, TIPOS_CADASTRO, ehCadastro } from '../lib/lancamentos'
 import { supabase } from '../lib/supabase'
 import { Badge } from '../components/Badge'
@@ -81,15 +81,11 @@ export function Historico() {
     try {
       if (c.modo === 'um') {
         const l = c.lancamento
-        await reverterLancamento(l)
-        const { error } = await supabase.from('lancamentos').delete().eq('id', l.id)
-        if (error) throw new Error(error.message)
+        await excluirLancamento(l.id)
         toast.success(ehCadastro(l.tipo) ? 'Registro removido do histórico' : 'Lançamento excluído e revertido')
       } else {
         const alvos = lancamentos.filter(l => selecionados.has(l.id))
-        for (const l of alvos) await reverterLancamento(l)
-        const { error } = await supabase.from('lancamentos').delete().in('id', [...selecionados])
-        if (error) throw new Error(error.message)
+        for (const l of alvos) await excluirLancamento(l.id)
         setSelecionados(new Set())
         toast.success(`${alvos.length} lançamento(s) excluído(s)!`)
       }
