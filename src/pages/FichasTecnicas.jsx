@@ -883,7 +883,8 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
   const [sugestaoRaw, setSugestaoRaw] = useState(null) // { altId, rawPorPacote }
   const [aviso, setAviso] = useState(null) // lista de insumos que vão cair no cru
   const [editId, setEditId] = useState(null) // id do insumo em edição inline
-  const [editForm, setEditForm] = useState({ quantidade: '', unidade: '', quantidadeAlt: '' })
+  const [editForm, setEditForm] = useState({ produtoId: '', quantidade: '', unidade: '', altId: '', quantidadeAlt: '' })
+  const [editPicker, setEditPicker] = useState(false) // seletor de porcionado na edição inline
   const produtoSel = produtos.find(p => p.id === parseInt(form.produtoId))
   const altSel = produtos.find(p => p.id === parseInt(form.altId))
 
@@ -891,6 +892,10 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
   const ehProducao = ficha.tipo_ficha === 'producao' || ehPorcionado
   const mostrarReserva = ficha.tipo_ficha === 'producao' || ficha.tipo_ficha === 'prato' // o "OU" (Produção e Prato)
   const prodGerado = produtos.find(p => p.id === ficha.produto_saida_id)
+  // Produtos que são porcionados (para anexar como insumo principal "OU").
+  const porcionados = produtos.filter(p =>
+    p.categoria === 'Porcionados' || fichas.some(f => f.tipo_ficha === 'porcionado' && f.produto_saida_id === p.id)
+  )
 
   // Custo total dos insumos desta ficha (resolve produtos de produção também)
   const custoTotal = ingredientes.reduce((s, ing) => s + (ing.quantidade || 0) * (custoUnit ? custoUnit(ing.produto_id) : 0), 0)
@@ -947,20 +952,24 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
     await supabase.from('ficha_ingredientes').delete().eq('id', id)
   }
 
-  // --- Edição inline de um insumo (quantidade / unidade de entrada / qtd do cru) ---
-  // A unidade exibida é sempre a do produto; o seletor permite digitar em outra
-  // unidade de peso/volume e converte para a do produto ao salvar.
+  // --- Edição inline de um insumo ---
+  // Edita quantidade/unidade sem deletar; e permite ANEXAR um porcionado a um
+  // insumo já existente (o porcionado vira o principal, consumido primeiro, e o
+  // produto que estava lá vira a reserva "OU" — o cru). A unidade exibida é
+  // sempre a do produto; o seletor converte de outra unidade de peso/volume.
   function iniciarEdicao(ing) {
     const prod = produtos.find(p => p.id === ing.produto_id)
     setEditForm({
+      produtoId: String(ing.produto_id),
       quantidade: String(ing.quantidade ?? ''),
       unidade: prod?.unidade || 'un',
+      altId: ing.produto_alt_id ? String(ing.produto_alt_id) : '',
       quantidadeAlt: ing.quantidade_alt != null ? String(ing.quantidade_alt) : '',
     })
     setEditId(ing.id)
   }
 
-  function cancelarEdicao() { setEditId(null) }
+  function cancelarEdicao() { setEditId(null); setEditPicker(false) }
 
   // Troca a unidade de entrada e reconverte o número para manter a equivalência.
   function mudarUnidadeEdicao(nova) {
@@ -971,19 +980,60 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
     })
   }
 
+  // Anexa um porcionado ao insumo em edição: o porcionado vira o principal e o
+  // produto atual (cru) vira a reserva. Sugere os pacotes pela medida do porcionado.
+  function usarPorcionadoNaEdicao(p) {
+    setEditPicker(false)
+    setEditForm(f => {
+      const cruId = f.produtoId
+      const cruUn = produtos.find(x => x.id === parseInt(cruId))?.unidade || 'un'
+      const cruQty = converterParaUnidadeProduto(parseFloat(String(f.quantidade).replace(',', '.')) || 0, f.unidade, cruUn)
+      const fp = fichas.find(x => x.tipo_ficha === 'porcionado' && x.produto_saida_id === p.id)
+      const ingRaw = fp ? todosIngredientes.find(i => i.ficha_id === fp.id) : null
+      const rawPorPacote = ingRaw?.quantidade || 0
+      const packs = rawPorPacote > 0 ? Math.round((cruQty / rawPorPacote) * 1000) / 1000 : ''
+      return {
+        produtoId: String(p.id),
+        quantidade: packs === '' ? '' : String(packs),
+        unidade: p.unidade || 'pct',
+        altId: cruId,
+        quantidadeAlt: String(cruQty),
+      }
+    })
+  }
+
+  // Desfaz o porcionado: o cru de reserva volta a ser o insumo principal.
+  function removerPorcionadoNaEdicao() {
+    setEditForm(f => {
+      if (!f.altId) return f
+      const cruUn = produtos.find(x => x.id === parseInt(f.altId))?.unidade || 'un'
+      return { produtoId: f.altId, quantidade: f.quantidadeAlt || '', unidade: cruUn, altId: '', quantidadeAlt: '' }
+    })
+  }
+
   async function salvarEdicao(ing) {
-    const prod = produtos.find(p => p.id === ing.produto_id)
-    const prodUn = prod?.unidade || 'un'
+    const principal = produtos.find(p => p.id === parseInt(editForm.produtoId))
+    const principalUn = principal?.unidade || 'un'
     const valor = parseFloat(String(editForm.quantidade).replace(',', '.'))
     if (isNaN(valor) || valor < 0) return toast.error('Informe uma quantidade válida')
-    const update = { quantidade: converterParaUnidadeProduto(valor, editForm.unidade, prodUn) }
-    if (ing.produto_alt_id) {
+    const novoProdId = parseInt(editForm.produtoId)
+    if (ingredientes.find(i => i.id !== ing.id && i.produto_id === novoProdId)) {
+      return toast.error('Já existe um insumo com esse produto principal nesta ficha')
+    }
+    const update = {
+      produto_id: novoProdId,
+      quantidade: converterParaUnidadeProduto(valor, editForm.unidade, principalUn),
+      produto_alt_id: null,
+      quantidade_alt: null,
+    }
+    if (mostrarReserva && editForm.altId) {
       const va = parseFloat(String(editForm.quantidadeAlt).replace(',', '.'))
-      if (!isNaN(va) && va >= 0) update.quantidade_alt = va
+      update.produto_alt_id = parseInt(editForm.altId)
+      update.quantidade_alt = (!isNaN(va) && va >= 0) ? va : 0
     }
     const { error } = await supabase.from('ficha_ingredientes').update(update).eq('id', ing.id)
     if (error) return toast.error(error.message)
-    setEditId(null)
+    setEditId(null); setEditPicker(false)
     toast.success('Insumo atualizado!')
   }
 
@@ -1135,12 +1185,16 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
               const alt = ing.produto_alt_id ? produtos.find(p => p.id === ing.produto_alt_id) : null
 
               if (editId === ing.id) {
-                const prodUn = prod?.unidade || 'un'
+                const principal = produtos.find(p => p.id === parseInt(editForm.produtoId))
+                const prodUn = principal?.unidade || 'un'
                 const podeConverter = UNIDADES_MEDIDA.includes(prodUn)
+                const reservaProd = editForm.altId ? produtos.find(p => p.id === parseInt(editForm.altId)) : null
+                const principalEhPorcionado = !!principal && (principal.categoria === 'Porcionados'
+                  || fichas.some(f => f.tipo_ficha === 'porcionado' && f.produto_saida_id === principal.id))
                 return (
                   <tr key={ing.id} className="border-t border-gray-100 bg-amber-50/50">
                     <td colSpan={3} className="px-3 py-3">
-                      <p className="text-sm font-medium text-gray-700 mb-2">{prod?.nome ?? 'Produto removido'}</p>
+                      <p className="text-sm font-medium text-gray-700 mb-2">{principal?.nome ?? 'Produto removido'}</p>
                       <div className="flex items-center gap-2 flex-wrap">
                         <input
                           type="number" min="0" step="0.001" inputMode="decimal" autoFocus
@@ -1157,23 +1211,44 @@ function DetalheIngredientes({ ficha, custoUnit, fichas = [], todosIngredientes 
                           <span className="text-sm text-gray-500">{prodUn}</span>
                         )}
                       </div>
-                      {alt && (
-                        <div className="flex items-center gap-2 mt-2">
-                          <span className="text-xs text-amber-700">OU {alt.nome}:</span>
-                          <input
-                            type="number" min="0" step="0.001" inputMode="decimal"
-                            className="input text-sm w-24"
-                            value={editForm.quantidadeAlt}
-                            onChange={e => setEditForm(f => ({ ...f, quantidadeAlt: e.target.value }))}
-                            placeholder="Qtd cru"
-                          />
-                          <span className="text-xs text-gray-500">{alt.unidade}</span>
+
+                      {/* Reserva "OU" (porcionado primeiro, cru de reserva) — só Produção/Prato */}
+                      {mostrarReserva && (editForm.altId ? (
+                        <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-2 space-y-1">
+                          <p className="text-xs text-amber-800 font-medium">Usa o porcionado primeiro; se faltar, o cru abaixo.</p>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-amber-700">OU {reservaProd?.nome ?? 'cru'}:</span>
+                            <input
+                              type="number" min="0" step="0.001" inputMode="decimal"
+                              className="input text-sm w-24"
+                              value={editForm.quantidadeAlt}
+                              onChange={e => setEditForm(f => ({ ...f, quantidadeAlt: e.target.value }))}
+                              placeholder="Qtd cru"
+                            />
+                            <span className="text-xs text-gray-500">{reservaProd?.unidade}</span>
+                            <button onClick={removerPorcionadoNaEdicao} className="text-xs text-gray-400 underline ml-auto">remover porcionado</button>
+                          </div>
                         </div>
-                      )}
+                      ) : !principalEhPorcionado ? (
+                        <button onClick={() => setEditPicker(true)} className="mt-2 block text-xs text-red-700 underline">
+                          + usar porcionado (consome o porcionado primeiro; este vira a reserva)
+                        </button>
+                      ) : null)}
+
                       <div className="flex gap-2 mt-3">
                         <button onClick={() => salvarEdicao(ing)} className="btn-primary text-xs px-3 py-1.5">Salvar</button>
                         <button onClick={cancelarEdicao} className="btn-secondary text-xs px-3 py-1.5">Cancelar</button>
                       </div>
+
+                      {editPicker && (
+                        <SeletorProduto
+                          titulo="Escolher porcionado (vira o insumo principal)"
+                          produtos={porcionados}
+                          excluirIds={ingredientes.map(i => i.produto_id)}
+                          onEscolher={usarPorcionadoNaEdicao}
+                          onClose={() => setEditPicker(false)}
+                        />
+                      )}
                     </td>
                   </tr>
                 )
