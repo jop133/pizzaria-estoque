@@ -156,3 +156,197 @@ create policy "ver lancamentos" on lancamentos
   for select using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid()));
 create policy "modificar lancamentos" on lancamentos
   for all using (organizacao_id in (select organizacao_id from membros where user_id = auth.uid()));
+
+-- =============================================
+-- FUNÇÕES / RPCs
+-- =============================================
+-- Organização e convites (SECURITY DEFINER — precisam ignorar RLS p/ criar
+-- vínculos e validar tokens). Já existiam no banco; documentadas aqui.
+
+create or replace function public.criar_organizacao(nome_org text, nome_usuario text)
+returns uuid language plpgsql security definer as $$
+declare nova_org_id uuid; uid uuid;
+begin
+  uid := auth.uid();
+  if uid is null then raise exception 'Nao autenticado'; end if;
+  insert into organizacoes (nome, dono_id) values (nome_org, uid) returning id into nova_org_id;
+  insert into membros (organizacao_id, user_id, papel, nome, email)
+    values (nova_org_id, uid, 'dono', nome_usuario, (select email from auth.users where id = uid));
+  return nova_org_id;
+end; $$;
+
+create or replace function public.entrar_por_convite(convite_token text, nome_usuario text)
+returns uuid language plpgsql security definer as $$
+declare conv record; uid uuid;
+begin
+  uid := auth.uid();
+  if uid is null then raise exception 'Nao autenticado'; end if;
+  select * into conv from convites where token = convite_token and usado = false and expira_em > now();
+  if conv is null then raise exception 'Convite invalido ou expirado'; end if;
+  update convites set usado = true where id = conv.id;
+  insert into membros (organizacao_id, user_id, papel, nome, email)
+    values (conv.organizacao_id, uid, 'funcionario', nome_usuario, (select email from auth.users where id = uid))
+    on conflict (organizacao_id, user_id) do nothing;
+  return conv.organizacao_id;
+end; $$;
+
+create or replace function public.excluir_organizacao(org_id uuid)
+returns void language plpgsql security definer as $$
+begin
+  if not exists (
+    select 1 from membros where organizacao_id = org_id and user_id = auth.uid() and papel = 'dono'
+  ) then
+    raise exception 'Apenas o Dono pode excluir a organização';
+  end if;
+  delete from organizacoes where id = org_id;
+end; $$;
+
+-- Mutações de estoque (jun/2026): cada operação roda em UMA transação, com
+-- decremento atômico (greatest(0, quantidade - x)) — elimina a race condition
+-- do antigo read-modify-write no cliente e o estado parcial em falha. São
+-- SECURITY INVOKER de propósito: o RLS continua valendo (defesa em profundidade);
+-- a org é derivada da própria entidade e o user vem de auth.uid().
+
+create or replace function public.lancar_entrada(
+  p_produto_id bigint, p_quantidade numeric, p_observacao text default '', p_marca text default null
+) returns void language plpgsql security invoker as $$
+declare v_org uuid;
+begin
+  select organizacao_id into v_org from produtos where id = p_produto_id;
+  if v_org is null then raise exception 'Produto não encontrado'; end if;
+  update produtos set quantidade = quantidade + p_quantidade where id = p_produto_id;
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, marca, user_id)
+    values (v_org, 'entrada', p_produto_id, p_quantidade, coalesce(p_observacao,''), nullif(p_marca,''), auth.uid());
+end; $$;
+
+create or replace function public.lancar_saida_manual(
+  p_produto_id bigint, p_quantidade numeric, p_observacao text default ''
+) returns void language plpgsql security invoker as $$
+declare v_org uuid;
+begin
+  select organizacao_id into v_org from produtos where id = p_produto_id;
+  if v_org is null then raise exception 'Produto não encontrado'; end if;
+  update produtos set quantidade = greatest(0, quantidade - p_quantidade) where id = p_produto_id;
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id)
+    values (v_org, 'saida_manual', p_produto_id, p_quantidade, coalesce(p_observacao,''), auth.uid());
+end; $$;
+
+create or replace function public.lancar_ajuste(
+  p_produto_id bigint, p_quantidade_contada numeric, p_nota_extra text default ''
+) returns void language plpgsql security invoker as $$
+declare v_org uuid; v_atual numeric; v_contado numeric; v_delta numeric; v_sinal text; v_obs text;
+begin
+  select organizacao_id, quantidade into v_org, v_atual from produtos where id = p_produto_id;
+  if v_org is null then raise exception 'Produto não encontrado'; end if;
+  v_atual := coalesce(v_atual, 0);
+  v_contado := greatest(0, p_quantidade_contada);
+  v_delta := round((v_contado - v_atual), 3);
+  if v_delta = 0 then return; end if;
+  update produtos set quantidade = v_contado where id = p_produto_id;
+  v_sinal := case when v_delta > 0 then '+' else '' end;
+  v_obs := 'Contagem: ' || trim_scale(v_atual) || ' → ' || trim_scale(v_contado)
+           || ' (' || v_sinal || trim_scale(v_delta) || ')';
+  if coalesce(p_nota_extra, '') <> '' then v_obs := v_obs || ' · ' || p_nota_extra; end if;
+  insert into lancamentos (organizacao_id, tipo, produto_id, quantidade, observacao, user_id)
+    values (v_org, 'ajuste', p_produto_id, v_contado, v_obs, auth.uid());
+end; $$;
+
+create or replace function public.lancar_saida_ficha(
+  p_ficha_id bigint, p_quantidade numeric, p_observacao text default ''
+) returns void language plpgsql security invoker as $$
+declare
+  v_org uuid; ing record;
+  v_prim_nec numeric; v_fonte_id bigint; v_fonte_qtd numeric; v_estoque numeric; v_prim_estoque numeric;
+begin
+  select organizacao_id into v_org from fichas_tecnicas where id = p_ficha_id;
+  if v_org is null then raise exception 'Ficha não encontrada'; end if;
+
+  for ing in
+    select produto_id, quantidade, produto_alt_id, quantidade_alt
+    from ficha_ingredientes where ficha_id = p_ficha_id
+  loop
+    v_prim_nec := coalesce(ing.quantidade, 0) * p_quantidade;
+    select quantidade into v_prim_estoque from produtos where id = ing.produto_id;
+    v_fonte_id := ing.produto_id;
+    v_fonte_qtd := v_prim_nec;
+    v_estoque := v_prim_estoque;
+    -- Reserva "OU": se faltar o porcionado, usa o cru.
+    if ing.produto_alt_id is not null and coalesce(v_prim_estoque, 0) < v_prim_nec then
+      select quantidade into v_estoque from produtos where id = ing.produto_alt_id;
+      v_fonte_id := ing.produto_alt_id;
+      v_fonte_qtd := coalesce(ing.quantidade_alt, 0) * p_quantidade;
+    end if;
+    if v_estoque is null then continue; end if;
+    update produtos set quantidade = greatest(0, v_estoque - v_fonte_qtd) where id = v_fonte_id;
+  end loop;
+
+  insert into lancamentos (organizacao_id, tipo, ficha_id, quantidade, observacao, user_id)
+    values (v_org, 'saida_ficha', p_ficha_id, p_quantidade, coalesce(p_observacao,''), auth.uid());
+end; $$;
+
+create or replace function public.lancar_producao(
+  p_ficha_id bigint, p_lotes numeric, p_observacao text default ''
+) returns numeric language plpgsql security invoker as $$
+declare
+  v_org uuid; v_nome text; v_saida_id bigint; v_rend numeric;
+  ing record; v_prim_nec numeric; v_fonte_id bigint; v_fonte_qtd numeric; v_disp_prim numeric;
+  v_nec jsonb := '{}'::jsonb; v_key text; v_count int := 0; v_falta text := ''; r record; v_gerado numeric;
+begin
+  if p_lotes is null or p_lotes <= 0 then raise exception 'Informe quantos lotes produzir'; end if;
+  select organizacao_id, nome, produto_saida_id, rendimento
+    into v_org, v_nome, v_saida_id, v_rend from fichas_tecnicas where id = p_ficha_id;
+  if v_org is null then raise exception 'Ficha não encontrada'; end if;
+  if v_saida_id is null then raise exception 'Esta ficha de produção não tem um produto gerado definido'; end if;
+  if v_rend is null or v_rend <= 0 then raise exception 'Defina o rendimento da ficha de produção'; end if;
+
+  -- 1) Agrega o necessário por produto (a decisão da reserva usa o estoque INICIAL).
+  for ing in
+    select produto_id, quantidade, produto_alt_id, quantidade_alt
+    from ficha_ingredientes where ficha_id = p_ficha_id
+  loop
+    v_count := v_count + 1;
+    v_prim_nec := coalesce(ing.quantidade, 0) * p_lotes;
+    v_fonte_id := ing.produto_id;
+    v_fonte_qtd := v_prim_nec;
+    if ing.produto_alt_id is not null then
+      select quantidade into v_disp_prim from produtos where id = ing.produto_id;
+      if coalesce(v_disp_prim, 0) < v_prim_nec then
+        v_fonte_id := ing.produto_alt_id;
+        v_fonte_qtd := coalesce(ing.quantidade_alt, 0) * p_lotes;
+      end if;
+    end if;
+    v_key := v_fonte_id::text;
+    v_nec := jsonb_set(v_nec, array[v_key],
+      to_jsonb( coalesce((v_nec ->> v_key)::numeric, 0) + v_fonte_qtd ));
+  end loop;
+  if v_count = 0 then raise exception 'Esta ficha de produção não tem insumos cadastrados'; end if;
+
+  -- 2) Pré-checagem (nada é alterado antes disto).
+  for r in select (kv.key)::bigint as produto_id, (kv.value)::numeric as nec from jsonb_each_text(v_nec) kv loop
+    declare v_nome_p text; v_un text; v_disp numeric;
+    begin
+      select nome, unidade, coalesce(quantidade, 0) into v_nome_p, v_un, v_disp from produtos where id = r.produto_id;
+      if coalesce(v_disp, 0) < r.nec then
+        v_falta := v_falta || case when v_falta <> '' then '; ' else '' end
+          || trim(both ' ' from (coalesce(v_nome_p,'Produto') || ' (falta '
+             || trim_scale(round(r.nec - coalesce(v_disp,0), 3)) || ' ' || coalesce(v_un,'') || ')'));
+      end if;
+    end;
+  end loop;
+  if v_falta <> '' then raise exception 'Estoque insuficiente para produzir: %', v_falta; end if;
+
+  -- 3) Consome (cada produto uma vez; greatest(0, atual - nec) == greatest(0, inicial - nec)).
+  update produtos p set quantidade = greatest(0, p.quantidade - (kv.value)::numeric)
+    from jsonb_each_text(v_nec) kv where p.id = (kv.key)::bigint;
+
+  -- 4) Gera o produto de saída.
+  v_gerado := round(v_rend * p_lotes, 3);
+  update produtos set quantidade = quantidade + v_gerado where id = v_saida_id;
+
+  -- 5) Lançamento.
+  insert into lancamentos (organizacao_id, tipo, ficha_id, produto_id, quantidade, observacao, user_id)
+    values (v_org, 'producao', p_ficha_id, v_saida_id, v_gerado,
+            coalesce(nullif(p_observacao, ''), 'Produção: ' || trim_scale(p_lotes) || ' lote(s) de ' || v_nome),
+            auth.uid());
+  return v_gerado;
+end; $$;

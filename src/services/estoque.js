@@ -1,84 +1,61 @@
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 
-export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') {
-  const orgId = session.organizacaoId
-  if (!orgId) throw new Error('Sem organização ativa')
+// As mutações de estoque são feitas por RPCs transacionais no Postgres
+// (lancar_*). Cada uma roda em UMA transação, com decremento atômico
+// (greatest(0, quantidade - x)) no banco — sem read-modify-write no cliente,
+// o que elimina race condition (lost update) e estado parcial em falha.
+// A organização e o user_id são derivados no servidor (auth.uid()), então o
+// cliente não envia mais organizacao_id. Ver as funções em supabase-setup.sql.
 
-  // select * para incluir, se existirem, as colunas da reserva "OU"
-  // (produto_alt_id / quantidade_alt) — antes da migração ficam ausentes.
-  const { data: ingredientes, error: errIng } = await supabase
-    .from('ficha_ingredientes')
-    .select('*')
-    .eq('ficha_id', fichaId)
-  // Guard ANTES de qualquer escrita: se a leitura falhar, abortamos sem
-  // registrar a saída — senão gravaríamos um lançamento que não baixou nada.
-  if (errIng) throw new Error('Erro ao ler os insumos da ficha: ' + errIng.message)
-
-  for (const ing of ingredientes || []) {
-    const primNec = (ing.quantidade || 0) * quantidade
-    // Lê o estoque do principal (porcionado); decide a fonte (prioriza porcionado).
-    const { data: prim } = await supabase
-      .from('produtos').select('quantidade').eq('id', ing.produto_id).single()
-    let fonteId = ing.produto_id
-    let fonteQtd = primNec
-    let estoqueFonte = prim?.quantidade
-    if (ing.produto_alt_id && (prim?.quantidade || 0) < primNec) {
-      const { data: alt } = await supabase
-        .from('produtos').select('quantidade').eq('id', ing.produto_alt_id).single()
-      fonteId = ing.produto_alt_id
-      fonteQtd = (ing.quantidade_alt || 0) * quantidade
-      estoqueFonte = alt?.quantidade
-    }
-    if (estoqueFonte == null) continue
-    // best-effort por item: a atomicidade total fica para a futura RPC. Se um
-    // update falhar, registramos e seguimos — abortar no meio deixaria baixas
-    // parciais sem lançamento (irreversível), pior que o estado atual.
-    const { error: errUpd } = await supabase
-      .from('produtos')
-      .update({ quantidade: Math.max(0, estoqueFonte - fonteQtd) })
-      .eq('id', fonteId)
-    if (errUpd) console.warn('[estoque] falha ao baixar produto', fonteId, errUpd.message)
-  }
-
-  const { error: errLanc } = await supabase.from('lancamentos').insert({
-    organizacao_id: orgId,
-    tipo: 'saida_ficha',
-    ficha_id: fichaId,
-    quantidade,
-    observacao,
-    user_id: session.userId,
+export async function registrarEntrada(produtoId, quantidade, observacao = '', marca = '') {
+  const { error } = await supabase.rpc('lancar_entrada', {
+    p_produto_id: produtoId,
+    p_quantidade: quantidade,
+    p_observacao: observacao,
+    p_marca: marca || null,
   })
-  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
+  if (error) throw new Error(error.message)
 }
 
 export async function registrarSaidaManual(produtoId, quantidade, observacao = '') {
-  const orgId = session.organizacaoId
-  if (!orgId) throw new Error('Sem organização ativa')
-
-  const { data: prod, error: errProd } = await supabase
-    .from('produtos')
-    .select('quantidade')
-    .eq('id', produtoId)
-    .single()
-  if (errProd) throw new Error('Erro ao ler o produto: ' + errProd.message)
-  if (!prod) throw new Error('Produto não encontrado')
-
-  const { error: errUpd } = await supabase
-    .from('produtos')
-    .update({ quantidade: Math.max(0, prod.quantidade - quantidade) })
-    .eq('id', produtoId)
-  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
-
-  const { error: errLanc } = await supabase.from('lancamentos').insert({
-    organizacao_id: orgId,
-    tipo: 'saida_manual',
-    produto_id: produtoId,
-    quantidade,
-    observacao,
-    user_id: session.userId,
+  const { error } = await supabase.rpc('lancar_saida_manual', {
+    p_produto_id: produtoId,
+    p_quantidade: quantidade,
+    p_observacao: observacao,
   })
-  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
+  if (error) throw new Error(error.message)
+}
+
+export async function registrarSaidaFicha(fichaId, quantidade, observacao = '') {
+  const { error } = await supabase.rpc('lancar_saida_ficha', {
+    p_ficha_id: fichaId,
+    p_quantidade: quantidade,
+    p_observacao: observacao,
+  })
+  if (error) throw new Error(error.message)
+}
+
+// Ajuste de inventário: fixa o estoque no valor contado e registra a diferença.
+export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = '') {
+  const { error } = await supabase.rpc('lancar_ajuste', {
+    p_produto_id: produtoId,
+    p_quantidade_contada: quantidadeContada,
+    p_nota_extra: notaExtra,
+  })
+  if (error) throw new Error(error.message)
+}
+
+// Produção (ficha de produção): consome insumos (com a decisão da reserva "OU")
+// e gera o produto de saída. Retorna a quantidade gerada.
+export async function registrarProducao(fichaId, lotes, observacao = '') {
+  const { data, error } = await supabase.rpc('lancar_producao', {
+    p_ficha_id: fichaId,
+    p_lotes: parseFloat(lotes),
+    p_observacao: observacao,
+  })
+  if (error) throw new Error(error.message)
+  return data
 }
 
 // Registra um evento de cadastro/auditoria no histórico (não mexe no estoque).
@@ -103,6 +80,7 @@ export async function registrarEvento(tipo, { produtoId = null, fichaId = null, 
 // Ajusta o estoque de um produto por um delta (+ entra, − sai), nunca negativo.
 // Helper best-effort usado pela reversão: não lança para não abortar o loop de
 // reverterLancamento no meio (preserva o comportamento atual); só observa erros.
+// (A reversão atômica/exata é o item #2 — snapshot.)
 async function ajustarEstoque(produtoId, delta) {
   if (!produtoId) return
   const { data: prod, error: errSel } = await supabase.from('produtos').select('quantidade').eq('id', produtoId).single()
@@ -160,186 +138,4 @@ export async function reverterLancamento(l) {
       if (!isNaN(delta)) await ajustarEstoque(l.produto_id, -delta)
     }
   }
-}
-
-// Produção (ficha de produção): consome os insumos e adiciona o produto gerado
-// ao estoque. Registra um lançamento tipo 'producao' para o produto gerado.
-export async function registrarProducao(fichaId, lotes, observacao = '') {
-  const orgId = session.organizacaoId
-  if (!orgId) throw new Error('Sem organização ativa')
-  const n = parseFloat(lotes)
-  if (!n || n <= 0) throw new Error('Informe quantos lotes produzir')
-
-  const { data: ficha, error: errFicha } = await supabase
-    .from('fichas_tecnicas')
-    .select('nome, produto_saida_id, rendimento')
-    .eq('id', fichaId)
-    .single()
-  if (errFicha) throw new Error('Erro ao ler a ficha: ' + errFicha.message)
-  if (!ficha) throw new Error('Ficha não encontrada')
-  if (!ficha.produto_saida_id) throw new Error('Esta ficha de produção não tem um produto gerado definido')
-  if (!ficha.rendimento || ficha.rendimento <= 0) throw new Error('Defina o rendimento da ficha de produção')
-
-  // Insumos da ficha (select * para incluir, quando existirem, as colunas da
-  // alternativa "OU": produto_alt_id / quantidade_alt — antes da migração ficam
-  // ausentes e o comportamento é o de sempre).
-  const { data: ingredientes, error: errIng } = await supabase
-    .from('ficha_ingredientes')
-    .select('*')
-    .eq('ficha_id', fichaId)
-  if (errIng) throw new Error('Erro ao ler os insumos da ficha: ' + errIng.message)
-
-  if (!ingredientes || ingredientes.length === 0) {
-    throw new Error('Esta ficha de produção não tem insumos cadastrados')
-  }
-
-  // Carrega os produtos envolvidos (principais + alternativos) numa consulta.
-  const ids = [...new Set(ingredientes.flatMap(i => [i.produto_id, i.produto_alt_id].filter(Boolean)))]
-  const { data: prods, error: errProds } = await supabase
-    .from('produtos')
-    .select('id, nome, quantidade, unidade')
-    .in('id', ids)
-  if (errProds) throw new Error('Erro ao ler os produtos: ' + errProds.message)
-  const mapaProd = Object.fromEntries((prods || []).map(p => [p.id, p]))
-
-  // Decide a fonte de cada insumo: prioriza o porcionado (produto_id); se não
-  // houver o suficiente E existir reserva (produto_alt_id), usa o cru. Agrega o
-  // necessário por produto (vários insumos podem usar o mesmo).
-  const necessarioPorProduto = {}
-  for (const ing of ingredientes) {
-    const primNec = (ing.quantidade || 0) * n
-    let fonteId = ing.produto_id
-    let fonteQtd = primNec
-    if (ing.produto_alt_id) {
-      const dispPrim = mapaProd[ing.produto_id]?.quantidade || 0
-      if (dispPrim < primNec) {
-        fonteId = ing.produto_alt_id
-        fonteQtd = (ing.quantidade_alt || 0) * n
-      }
-    }
-    necessarioPorProduto[fonteId] = (necessarioPorProduto[fonteId] || 0) + fonteQtd
-  }
-
-  // PRÉ-CHECAGEM: bloqueia se faltar a fonte escolhida (nada é alterado antes disto).
-  const faltantes = []
-  for (const [id, nec] of Object.entries(necessarioPorProduto)) {
-    const prod = mapaProd[id]
-    const disponivel = prod?.quantidade || 0
-    if (disponivel < nec) {
-      const falta = Math.round((nec - disponivel) * 1000) / 1000
-      faltantes.push(`${prod?.nome || 'Produto'} (falta ${falta} ${prod?.unidade || ''})`.trim())
-    }
-  }
-  if (faltantes.length > 0) {
-    throw new Error('Estoque insuficiente para produzir: ' + faltantes.join('; '))
-  }
-
-  // Consome os insumos (já agregados por produto). best-effort por item: a
-  // atomicidade total fica para a futura RPC.
-  for (const [id, nec] of Object.entries(necessarioPorProduto)) {
-    const prod = mapaProd[id]
-    if (!prod) continue
-    const { error: errCons } = await supabase
-      .from('produtos')
-      .update({ quantidade: Math.max(0, prod.quantidade - nec) })
-      .eq('id', parseInt(id))
-    if (errCons) console.warn('[estoque] falha ao consumir insumo', id, errCons.message)
-  }
-
-  // Adiciona o produto gerado
-  const gerado = Math.round(ficha.rendimento * n * 1000) / 1000
-  const { data: saida, error: errSaida } = await supabase
-    .from('produtos')
-    .select('quantidade')
-    .eq('id', ficha.produto_saida_id)
-    .single()
-  if (errSaida) throw new Error('Erro ao ler o produto gerado: ' + errSaida.message)
-  if (!saida) throw new Error('Produto gerado não encontrado')
-  const { error: errAdd } = await supabase
-    .from('produtos')
-    .update({ quantidade: saida.quantidade + gerado })
-    .eq('id', ficha.produto_saida_id)
-  if (errAdd) throw new Error('Erro ao adicionar o produto gerado: ' + errAdd.message)
-
-  const { error: errLanc } = await supabase.from('lancamentos').insert({
-    organizacao_id: orgId,
-    tipo: 'producao',
-    ficha_id: fichaId,
-    produto_id: ficha.produto_saida_id,
-    quantidade: gerado,
-    observacao: observacao || `Produção: ${n} lote(s) de ${ficha.nome}`,
-    user_id: session.userId,
-  })
-  if (errLanc) throw new Error('Erro ao registrar o lançamento de produção: ' + errLanc.message)
-
-  return gerado
-}
-
-// Ajuste de inventário: define o estoque do produto para o valor contado e
-// registra a diferença no histórico (tipo 'ajuste'). Não soma/subtrai — fixa.
-export async function registrarAjuste(produtoId, quantidadeContada, notaExtra = '') {
-  const orgId = session.organizacaoId
-  if (!orgId) throw new Error('Sem organização ativa')
-
-  const { data: prod, error: errSel } = await supabase
-    .from('produtos')
-    .select('quantidade')
-    .eq('id', produtoId)
-    .single()
-  if (errSel) throw new Error('Erro ao ler o produto: ' + errSel.message)
-  if (!prod) throw new Error('Produto não encontrado')
-
-  const atual = prod.quantidade || 0
-  const contado = Math.max(0, quantidadeContada)
-  const delta = Math.round((contado - atual) * 1000) / 1000
-  if (delta === 0) return // nada mudou, não registra
-
-  const { error: errUpd } = await supabase
-    .from('produtos')
-    .update({ quantidade: contado })
-    .eq('id', produtoId)
-  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
-
-  const sinal = delta > 0 ? '+' : ''
-  const obs = `Contagem: ${atual} → ${contado} (${sinal}${delta})` + (notaExtra ? ` · ${notaExtra}` : '')
-
-  const { error: errLanc } = await supabase.from('lancamentos').insert({
-    organizacao_id: orgId,
-    tipo: 'ajuste',
-    produto_id: produtoId,
-    quantidade: contado,
-    observacao: obs,
-    user_id: session.userId,
-  })
-  if (errLanc) throw new Error('Erro ao registrar o ajuste: ' + errLanc.message)
-}
-
-export async function registrarEntrada(produtoId, quantidade, observacao = '', marca = '') {
-  const orgId = session.organizacaoId
-  if (!orgId) throw new Error('Sem organização ativa')
-
-  const { data: prod, error: errSel } = await supabase
-    .from('produtos')
-    .select('quantidade')
-    .eq('id', produtoId)
-    .single()
-  if (errSel) throw new Error('Erro ao ler o produto: ' + errSel.message)
-  if (!prod) throw new Error('Produto não encontrado')
-
-  const { error: errUpd } = await supabase
-    .from('produtos')
-    .update({ quantidade: prod.quantidade + quantidade })
-    .eq('id', produtoId)
-  if (errUpd) throw new Error('Erro ao atualizar o estoque: ' + errUpd.message)
-
-  const { error: errLanc } = await supabase.from('lancamentos').insert({
-    organizacao_id: orgId,
-    tipo: 'entrada',
-    produto_id: produtoId,
-    quantidade,
-    observacao,
-    marca: marca || null,
-    user_id: session.userId,
-  })
-  if (errLanc) throw new Error('Erro ao registrar o lançamento: ' + errLanc.message)
 }
