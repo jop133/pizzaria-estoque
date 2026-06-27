@@ -5,6 +5,7 @@ import { registrarEntrada, registrarSaidaManual, registrarSaidaFicha } from '../
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
 import { expandirArquivosParaImagens } from '../lib/arquivos'
+import { lerVendasXlsx } from '../lib/vendas'
 import { SeletorProduto } from '../components/SeletorProduto'
 import { X } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -37,9 +38,11 @@ export function ImportarFoto() {
   const [confirmGrupos, setConfirmGrupos] = useState({}) // { chave: true }
   const [totaisManuais, setTotaisManuais] = useState({}) // { chave: '40.5' } override do total
   const [marcasGrupo, setMarcasGrupo] = useState({})     // { chave: 'Tio João' }
+  const [ignorados, setIgnorados] = useState([])         // itens do topo pulados (configuráveis, detalhados em Opções)
 
   const fileRef = useRef()
   const cameraRef = useRef()
+  const planilhaRef = useRef()
 
   function salvarChave() {
     const chave = chaveTemp.trim()
@@ -214,6 +217,83 @@ export function ImportarFoto() {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Importação de PLANILHA de vendas (.xlsx) — sem IA. Lê os itens "prontos" do
+  // topo + os sabores de Opções (ver lib/vendas.js) e injeta na mesma revisão.
+  // ---------------------------------------------------------------------------
+  const semAcento = s => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+
+  // Nome "base" do sabor: tira "pizza", "1/2", e marcadores de tamanho.
+  function saborBase(nome) {
+    return semAcento(nome)
+      .replace(/\bpizza\b/g, ' ').replace(/1\/2/g, ' ').replace(/\bmeia\b/g, ' ')
+      .replace(/\bgrande\b|\bpequena\b/g, ' ').replace(/(^|\s)[gp](\s|$)/g, ' ')
+      .replace(/\s+/g, ' ').trim()
+  }
+  function fichaTemTamanho(fichaNomeNorm, tamanho) {
+    if (tamanho === 'G') return /(^|\s)g(\s|$)/.test(fichaNomeNorm) || /\bgrande\b/.test(fichaNomeNorm)
+    if (tamanho === 'P') return /(^|\s)p(\s|$)/.test(fichaNomeNorm) || /\bpequena\b/.test(fichaNomeNorm)
+    return true
+  }
+  // Acha a ficha do sabor NO TAMANHO certo (G/P vem da seção da planilha).
+  // Só casa se for do tamanho certo — evita baixar uma "Argentina P" como "G".
+  function encontrarFichaSaborTamanho(nome, tamanho) {
+    const palavras = saborBase(nome).split(' ').filter(w => w.length >= 3)
+    if (!palavras.length) return null
+    const f = fichas.find(fi => {
+      const fn = semAcento(fi.nome)
+      return fichaTemTamanho(fn, tamanho) && palavras.every(w => fn.includes(w))
+    })
+    return f?.id ?? null
+  }
+
+  function construirItemVenda(raw) {
+    const base = construirItem({ nome: raw.nome, quantidade: raw.quantidade }, {})
+    if (raw.tamanho) {
+      // Pizza: vínculo por sabor + tamanho. Sem match do tamanho certo → fica
+      // "sem vínculo" (você mapeia), em vez de baixar o tamanho errado.
+      return { ...base, fichaId: encontrarFichaSaborTamanho(raw.nome, raw.tamanho), produtoId: null }
+    }
+    return base
+  }
+
+  function entradaPlanilha(itensRaw, nomeArquivo) {
+    const itens = itensRaw.map(construirItemVenda)
+    return {
+      id: Math.random().toString(36).slice(2),
+      url: null,
+      file: { name: nomeArquivo },
+      status: 'pronto',
+      resultado: { tipo: 'saida_ficha', itens },
+      itens,
+    }
+  }
+
+  async function importarPlanilhaVendas(e) {
+    const file = e.target.files[0]
+    e.target.value = ''
+    if (!file) return
+    setTipoLote('saida_ficha')
+    const t = toast.loading('Lendo planilha...')
+    try {
+      const { itens, ignorados: ign } = await lerVendasXlsx(file)
+      if (!itens.length) { toast.dismiss(t); return toast.error('Nenhum item encontrado na planilha.') }
+      setFila(prev => [...prev, entradaPlanilha(itens, file.name)])
+      setIgnorados(prev => [...prev, ...ign])
+      toast.dismiss(t)
+      toast.success(`${itens.length} item(ns) lido(s). Revise antes de lançar.`)
+    } catch (err) {
+      toast.dismiss(t)
+      toast.error('Erro ao ler a planilha: ' + (err?.message || 'verifique o arquivo'), { duration: 6000 })
+    }
+  }
+
+  // Reincluir um item do topo que foi pulado (vira uma entrada própria p/ revisão).
+  function incluirIgnorado(item) {
+    setFila(prev => [...prev, entradaPlanilha([{ nome: item.nome, quantidade: item.quantidade }], 'incluído manualmente')])
+    setIgnorados(prev => prev.filter(x => x !== item))
+  }
+
   async function analisarTodas() {
     if (!apiKey) return toast.error('Configure a chave da API primeiro')
     const pendentes = fila.filter(f => f.status === 'aguardando')
@@ -342,6 +422,17 @@ export function ImportarFoto() {
     setConfirmGrupos(prev => { const n = { ...prev }; delete n[chave]; return n })
   }
   function confirmarGrupo(chave) { setConfirmGrupos(prev => ({ ...prev, [chave]: true })) }
+  // Confirma de uma vez todos os grupos JÁ vinculados a ficha/produto (não os
+  // "sem vínculo"/"novo", que precisam de decisão). Útil no volume da planilha.
+  function confirmarTodosVinculados() {
+    setConfirmGrupos(prev => {
+      const novo = { ...prev }
+      grupos.forEach(g => {
+        if (!pularGrupos[g.chave] && (g.tipo === 'ficha' || g.tipo === 'produto')) novo[g.chave] = true
+      })
+      return novo
+    })
+  }
 
   const gruposAtivos = grupos.filter(g => !pularGrupos[g.chave])
   const gruposConfirmados = gruposAtivos.filter(g => confirmGrupos[g.chave])
@@ -542,6 +633,7 @@ export function ImportarFoto() {
     <div className="space-y-4 max-w-lg mx-auto pb-28">
       <input ref={fileRef} type="file" accept="image/*,application/pdf" multiple className="hidden" onChange={adicionarArquivos} />
       <input ref={cameraRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={adicionarArquivos} />
+      <input ref={planilhaRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={importarPlanilhaVendas} />
 
       {/* ----------------------------- TELA INICIAL ----------------------------- */}
       {!emRevisao && (
@@ -601,6 +693,14 @@ export function ImportarFoto() {
                 </div>
               </div>
 
+              {tipoLote === 'saida_ficha' && (
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center space-y-2">
+                  <p className="text-sm text-green-800 font-medium">📊 Ou importe a planilha de vendas (.xlsx)</p>
+                  <p className="text-xs text-green-600">Lê os itens prontos + os sabores das pizzas (Opções). Sem IA.</p>
+                  <button onClick={() => planilhaRef.current.click()} className="btn-secondary text-sm">📊 Importar planilha</button>
+                </div>
+              )}
+
               {aguardando.length > 0 && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -635,7 +735,7 @@ export function ImportarFoto() {
         <>
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-gray-800">Revisar — {tipoLabel[tipoLote]}</h1>
-            <button onClick={() => setFila([])} className="text-sm text-gray-500 underline">Limpar</button>
+            <button onClick={() => { setFila([]); setIgnorados([]) }} className="text-sm text-gray-500 underline">Limpar</button>
           </div>
 
           <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
@@ -643,11 +743,32 @@ export function ImportarFoto() {
               <strong>{grupos.length}</strong> produto(s) · {totalLinhas} item(ns) lidos.
               Confira e toque em <strong>Confirmar</strong> em cada um.
             </p>
+            <button onClick={confirmarTodosVinculados} className="btn-secondary w-full text-sm">✓ Confirmar todos os já vinculados</button>
             <button onClick={() => fileRef.current.click()} className="text-sm text-red-700 underline">+ Adicionar outra foto</button>
             {aguardando.length > 0 && (
               <button onClick={analisarTodas} className="btn-secondary w-full text-sm">🔍 Analisar {aguardando.length} nova(s)</button>
             )}
           </div>
+
+          {/* Itens do topo pulados (configuráveis, detalhados em Opções) — transparência */}
+          {ignorados.length > 0 && (
+            <details className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+              <summary className="text-sm font-medium text-amber-800 cursor-pointer">
+                {ignorados.length} item(ns) do topo ignorado(s) (detalhados em Opções) — toque para ver
+              </summary>
+              <p className="text-xs text-amber-700 mt-2 mb-1">
+                São os genéricos (Pizza Grande, combos…). A baixa vem pelos sabores de Opções. Se algum não deveria ter sido pulado, toque em "incluir".
+              </p>
+              <div className="space-y-1 max-h-56 overflow-y-auto">
+                {ignorados.map((it, i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 text-xs border-b border-amber-100 py-1">
+                    <span className="text-gray-700 truncate">{it.nome} <span className="text-gray-400">({it.quantidade})</span></span>
+                    <button onClick={() => incluirIgnorado(it)} className="text-amber-700 underline shrink-0">incluir</button>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
 
           {grupos.map(g => renderGrupo(g))}
 
