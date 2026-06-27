@@ -223,6 +223,26 @@ export function ImportarFoto() {
   // ---------------------------------------------------------------------------
   const semAcento = s => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+  // Similaridade entre 2 palavras (0–1) via Levenshtein — tolera erro de
+  // digitação (ex: "margerita" ~ "margherita"). tokProximo: alguma palavra de
+  // `lista` é parecida com `w`?
+  function levSim(a, b) {
+    if (a === b) return 1
+    const m = a.length, n = b.length
+    if (m < 3 || n < 3) return 0
+    const d = Array.from({ length: n + 1 }, (_, j) => j)
+    for (let i = 1; i <= m; i++) {
+      let prev = d[0]; d[0] = i
+      for (let j = 1; j <= n; j++) {
+        const tmp = d[j]
+        d[j] = Math.min(d[j] + 1, d[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1))
+        prev = tmp
+      }
+    }
+    return 1 - d[n] / Math.max(m, n)
+  }
+  const tokProximo = (w, lista) => lista.some(t => t === w || levSim(w, t) >= 0.84)
+
   // Nome "base" do sabor: tira "pizza", "1/2", e marcadores de tamanho.
   function saborBase(nome) {
     return semAcento(nome)
@@ -242,7 +262,10 @@ export function ImportarFoto() {
     if (!palavras.length) return null
     const f = fichas.find(fi => {
       const fn = semAcento(fi.nome)
-      return fichaTemTamanho(fn, tamanho) && palavras.every(w => fn.includes(w))
+      if (!fichaTemTamanho(fn, tamanho)) return false
+      const toks = fn.split(/\s+/)
+      // toda palavra do sabor aparece (ou é parecida — tolera digitação) na ficha
+      return palavras.every(w => fn.includes(w) || tokProximo(w, toks))
     })
     return f?.id ?? null
   }
@@ -260,10 +283,12 @@ export function ImportarFoto() {
       ...produtos.map(p => ({ id: p.id, nome: p.nome, tipo: 'produto' })),
       ...fichas.map(f => ({ id: f.id, nome: f.nome, tipo: 'ficha' })),
     ]
+    const tbArr = [...tb]
     let melhor = null, best = 0
     for (const c of cands) {
       const tc = new Set(tokensV(c.nome)); if (!tc.size) continue
-      let inter = 0; for (const w of tc) if (tb.has(w)) inter++
+      // interseção com tolerância a digitação
+      let inter = 0; for (const w of tc) if (tbArr.some(b => b === w || levSim(w, b) >= 0.84)) inter++
       const uni = new Set([...tc, ...tb]).size
       const score = inter / uni
       if (score > best) { best = score; melhor = c }

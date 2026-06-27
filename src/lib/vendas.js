@@ -21,6 +21,14 @@ const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isN
 const limpa = s => String(s || '').trim()
 const semAcento = s => limpa(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
 
+// Apelidos/sinônimos do cardápio (aplicados na LEITURA, antes de classificar).
+// "Mini pizza" é pierzitta; "Nutella" = sabor Cioccolato. Lista extensível.
+const ALIASES = [
+  [/mini\s*pizzas?/gi, 'Pierzitta'],
+  [/nutella/gi, 'Cioccolato'],
+]
+const aplicarAliases = nome => ALIASES.reduce((s, [re, sub]) => s.replace(re, sub), String(nome || ''))
+
 // Tamanho de um nome de PIZZA: 'G' (grande) | 'P' (pequena) | null (não-pizza).
 function tamanhoDoNome(nome) {
   const s = semAcento(nome)
@@ -54,6 +62,27 @@ function segmentosPizzaCombo(nome) {
   })
 }
 
+// Combos de PIERZITTA em texto livre (lista por vírgula/"e", às vezes em "()").
+// Ex: "SELEÇÃO PIER ( 1 Pierzitta Calabresa, 1 Pierzitta margherita, ...)" ou
+// "Seleção-5 Pierzittas Calabresa,Argentina,...". Retorna [{nome,n}] ou null.
+function segmentosPierzittaCombo(nome) {
+  const s = semAcento(nome)
+  const ehCombo = /selecao/.test(s) || (s.match(/pierzitta/g) || []).length > 1 || (s.includes(',') && /pierzitta/.test(s))
+  if (!ehCombo) return null
+  const par = nome.match(/\(([^)]+)\)/)
+  const lista = par ? par[1] : nome.replace(/^.*pierzittas?/i, '')
+  const out = []
+  for (const p of lista.split(/,|\be\b|\+/i).map(x => x.trim()).filter(Boolean)) {
+    const numM = p.match(/(\d+)\s*pierzitta/i)
+    const n = numM ? parseInt(numM[1], 10) : 1
+    const flavor = p.replace(/\d+/g, '').replace(/pierzittas?/ig, '').replace(/\./g, '').replace(/\s+/g, ' ').trim()
+    if (flavor && !/refri|lata|coca|guaran|350|refrigerante|schweppes|soda/i.test(flavor)) {
+      out.push({ nome: 'Pierzitta ' + flavor, n })
+    }
+  }
+  return out.length ? out : null
+}
+
 // "Pizza 1/2 X e 1/2 Y G" → [{X, q/2}, {Y, q/2}] (0,5 EXATO). null se não casar.
 function dividirMeioAMeio(nome, quantidade, tamanho) {
   const limpo = nome.replace(/pizza/ig, ' ').replace(/\s+/g, ' ').trim()
@@ -80,7 +109,7 @@ export function parseVendasRows(rows) {
   const blocos = []
   let cur = null
   for (let i = start; i < rows.length; i++) {
-    const c0 = limpa(rows[i][0]); const q = num(rows[i][1])
+    const c0 = aplicarAliases(limpa(rows[i][0])); const q = num(rows[i][1])
     if (!c0 || q === null) continue
     if (c0.startsWith('-')) {
       if (cur) cur.filhos.push({ nome: c0.replace(/^-+\s*/, '').trim(), q })
@@ -123,10 +152,10 @@ export function parseVendasRows(rows) {
       for (const f of b.filhos) emitir(f.nome, f.q, tamanhoFilho(b.nome, f.nome))
     } else {
       // Específico (Pizza Calabresa G…), combo "Diversos - …" ou pronto.
-      const segs = segmentosPizzaCombo(b.nome)
+      const segs = segmentosPierzittaCombo(b.nome) || segmentosPizzaCombo(b.nome)
       if (segs) {
-        // Combo com pizza(s): emite cada pizza (sabor+tamanho), × qtd do combo.
-        for (const sg of segs) emitir(sg.nome, sg.n * b.q, sg.tam)
+        // Combo (pierzitta ou pizza): emite cada item, × qtd do combo.
+        for (const sg of segs) emitir(sg.nome, sg.n * b.q, sg.tam ?? null)
       } else if (/\+/.test(b.nome)) {
         // Combo NÃO-pizza (ex: "Spaghetti + Coca Grátis"): separa no "+".
         const limpo = b.nome.replace(/^diversos\s*-\s*/i, '')
