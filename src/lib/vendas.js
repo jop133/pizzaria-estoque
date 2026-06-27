@@ -26,8 +26,32 @@ function tamanhoDoNome(nome) {
   const s = semAcento(nome)
   if (!s.includes('pizza')) return null
   if (/\bgrande\b/.test(s) || /(^|\s)g(\s|$)/.test(s)) return 'G'
-  if (/\bpequena\b/.test(s) || /(^|\s)p(\s|$)/.test(s)) return 'P'
+  if (/\bpequen[ao]\b/.test(s) || /(^|\s)p(\s|$)/.test(s)) return 'P' // pequena E pequeno
   return null
+}
+
+// Combos "Diversos - ..." em texto livre: extrai as PIZZAS (pode ter várias,
+// separadas por "+" ou numa lista entre parênteses, com número e tamanho por
+// pizza). Retorna [{ nome, n, tam }] ou null se o combo não tem pizza.
+function segmentosPizzaCombo(nome) {
+  if (!/pizza/i.test(nome)) return null
+  let s = nome.replace(/^diversos\s*-\s*/i, '')
+  const par = s.match(/\(([^)]*pizza[^)]*)\)/i) // lista entre parênteses (RESENHA/SELEÇÃO)
+  if (par) s = par[1]
+  const tamGlobal = tamanhoDoNome(nome)
+  const segs = s.split('+').map(x => x.trim()).filter(x => /pizza/i.test(x))
+  if (!segs.length) return null
+  return segs.map(seg => {
+    const numM = seg.match(/(\d+)\s*pizza/i)
+    const n = numM ? parseInt(numM[1], 10) : 1
+    const tam = tamanhoDoNome(seg) || tamGlobal
+    const nomeSeg = seg
+      .replace(/(\d+)\s*pizza/i, 'pizza')
+      .replace(/\([^)]*\)/g, ' ')      // tira "(Pequeno)" etc
+      .replace(/-?\s*\d+\s*cm/gi, ' ')  // tira "- 28 cm"
+      .replace(/\s+/g, ' ').trim()
+    return { nome: nomeSeg, n, tam }
+  })
 }
 
 // "Pizza 1/2 X e 1/2 Y G" → [{X, q/2}, {Y, q/2}] (0,5 EXATO). null se não casar.
@@ -98,9 +122,16 @@ export function parseVendasRows(rows) {
       ignorados.push({ nome: b.nome, quantidade: b.q })
       for (const f of b.filhos) emitir(f.nome, f.q, tamanhoFilho(b.nome, f.nome))
     } else {
-      // Específico (Pizza Calabresa G…) ou pronto (sem filhos): a venda é o PAI;
-      // os filhos (borda/bebida) são adicionais, baixados por nome.
-      emitir(b.nome, b.q, tamanhoDoNome(b.nome))
+      // Específico (Pizza Calabresa G…), combo "Diversos - …" ou pronto.
+      const segs = segmentosPizzaCombo(b.nome)
+      if (segs) {
+        // Combo com pizza(s): emite cada pizza (sabor+tamanho), × qtd do combo.
+        for (const sg of segs) emitir(sg.nome, sg.n * b.q, sg.tam)
+      } else {
+        // Prato/item: tira o prefixo "Diversos -" e casa pelo nome.
+        emitir(b.nome.replace(/^diversos\s*-\s*/i, '').trim(), b.q, tamanhoDoNome(b.nome))
+      }
+      // Filhos (borda/bebida) são adicionais, baixados por nome.
       for (const f of b.filhos) emitir(f.nome, f.q, null)
     }
   }
