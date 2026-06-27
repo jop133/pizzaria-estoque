@@ -247,14 +247,28 @@ export function ImportarFoto() {
     return f?.id ?? null
   }
 
+  // A ficha tem um tamanho que CONFLITA com o do item? (ficha G vs item P, etc.)
+  function tamanhoConflita(fichaNome, tamanho) {
+    const fn = semAcento(fichaNome)
+    const g = /(^|\s)g(\s|$)/.test(fn) || /\bgrande\b/.test(fn)
+    const p = /(^|\s)p(\s|$)/.test(fn) || /\bpequena\b/.test(fn)
+    return (tamanho === 'G' && p && !g) || (tamanho === 'P' && g && !p)
+  }
+
   function construirItemVenda(raw) {
     const base = construirItem({ nome: raw.nome, quantidade: raw.quantidade }, {})
+    // Mostra o tamanho na revisão (ex: "Argentina (G)") pra não confundir.
+    if (raw.tamanho) base.nome = `${raw.nome} (${raw.tamanho})`
     if (raw.tamanho) {
-      // Pizza: vínculo por sabor + tamanho. Se achar a ficha do tamanho certo,
-      // usa. Senão, CAI no match por nome (ex: Cannoli/Batata que pegaram tamanho
-      // por engano por serem filhos de uma pizza) — em vez de ficar sem vínculo.
       const fichaId = encontrarFichaSaborTamanho(raw.nome, raw.tamanho)
       if (fichaId) return { ...base, fichaId, produtoId: null }
+      // Sabor+tamanho falhou. O match por NOME ignora G/P, então pode cair numa
+      // ficha de OUTRO tamanho — se a ficha do `base` conflita no tamanho, deixa
+      // SEM vínculo (você mapeia). Itens sem tamanho na ficha (Cannoli) seguem.
+      const fBase = fichas.find(f => f.id === base.fichaId)
+      if (fBase && tamanhoConflita(fBase.nome, raw.tamanho)) {
+        return { ...base, fichaId: null, produtoId: null }
+      }
     }
     return base
   }
