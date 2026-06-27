@@ -247,6 +247,30 @@ export function ImportarFoto() {
     return f?.id ?? null
   }
 
+  // Match PRECISO por nome (para não-pizza): sobreposição de tokens (Jaccard),
+  // bidirecional — exige que os tokens distintivos (Lata/2L/Zero/350) batam, pra
+  // não colapsar variantes de bebida. Casa contra produtos E fichas; abaixo do
+  // limiar fica sem vínculo (você mapeia) em vez de cair na errada.
+  const STOP_V = new Set(['de', 'da', 'do', 'dos', 'das', 'e', 'a', 'o', 'os', 'as', 'ao', 'com', 'para', 'no', 'na', 'gratis', 'unidade', 'und', 'un', 'uni', 'ml'])
+  const tokensV = s => semAcento(s).replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w && !STOP_V.has(w))
+  function matchVendaNome(nome) {
+    const tb = new Set(tokensV(nome))
+    if (!tb.size) return null
+    const cands = [
+      ...produtos.map(p => ({ id: p.id, nome: p.nome, tipo: 'produto' })),
+      ...fichas.map(f => ({ id: f.id, nome: f.nome, tipo: 'ficha' })),
+    ]
+    let melhor = null, best = 0
+    for (const c of cands) {
+      const tc = new Set(tokensV(c.nome)); if (!tc.size) continue
+      let inter = 0; for (const w of tc) if (tb.has(w)) inter++
+      const uni = new Set([...tc, ...tb]).size
+      const score = inter / uni
+      if (score > best) { best = score; melhor = c }
+    }
+    return best >= 0.5 ? melhor : null
+  }
+
   // A ficha tem um tamanho que CONFLITA com o do item? (ficha G vs item P, etc.)
   function tamanhoConflita(fichaNome, tamanho) {
     const fn = semAcento(fichaNome)
@@ -269,8 +293,16 @@ export function ImportarFoto() {
       if (fBase && tamanhoConflita(fBase.nome, raw.tamanho)) {
         return { ...base, fichaId: null, produtoId: null }
       }
+      return base
     }
-    return base
+    // Não-pizza (bebida/prato/borda/pierzitta): match preciso por nome (Jaccard),
+    // que separa as variantes de Coca/Guaraná em vez de colapsar numa só.
+    const m = matchVendaNome(raw.nome)
+    return {
+      ...base,
+      fichaId: m && m.tipo === 'ficha' ? m.id : null,
+      produtoId: m && m.tipo === 'produto' ? m.id : null,
+    }
   }
 
   function entradaPlanilha(itensRaw, nomeArquivo) {

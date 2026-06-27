@@ -127,6 +127,10 @@ export function parseVendasRows(rows) {
       if (segs) {
         // Combo com pizza(s): emite cada pizza (sabor+tamanho), × qtd do combo.
         for (const sg of segs) emitir(sg.nome, sg.n * b.q, sg.tam)
+      } else if (/\+/.test(b.nome)) {
+        // Combo NÃO-pizza (ex: "Spaghetti + Coca Grátis"): separa no "+".
+        const limpo = b.nome.replace(/^diversos\s*-\s*/i, '')
+        for (const seg of limpo.split('+').map(x => x.trim()).filter(Boolean)) emitir(seg, b.q, tamanhoDoNome(seg))
       } else {
         // Prato/item: tira o prefixo "Diversos -" e casa pelo nome.
         emitir(b.nome.replace(/^diversos\s*-\s*/i, '').trim(), b.q, tamanhoDoNome(b.nome))
