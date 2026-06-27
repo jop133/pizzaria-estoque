@@ -250,9 +250,11 @@ export function ImportarFoto() {
   function construirItemVenda(raw) {
     const base = construirItem({ nome: raw.nome, quantidade: raw.quantidade }, {})
     if (raw.tamanho) {
-      // Pizza: vínculo por sabor + tamanho. Sem match do tamanho certo → fica
-      // "sem vínculo" (você mapeia), em vez de baixar o tamanho errado.
-      return { ...base, fichaId: encontrarFichaSaborTamanho(raw.nome, raw.tamanho), produtoId: null }
+      // Pizza: vínculo por sabor + tamanho. Se achar a ficha do tamanho certo,
+      // usa. Senão, CAI no match por nome (ex: Cannoli/Batata que pegaram tamanho
+      // por engano por serem filhos de uma pizza) — em vez de ficar sem vínculo.
+      const fichaId = encontrarFichaSaborTamanho(raw.nome, raw.tamanho)
+      if (fichaId) return { ...base, fichaId, produtoId: null }
     }
     return base
   }
