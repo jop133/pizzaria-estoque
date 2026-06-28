@@ -25,7 +25,8 @@ const semAcento = s => limpa(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/
 // "Mini pizza" é pierzitta; "Nutella" = sabor Cioccolato. Lista extensível.
 const ALIASES = [
   [/mini\s*pizzas?/gi, 'Pierzitta'],
-  [/nutella/gi, 'Cioccolato'],
+  [/nutella/gi, 'Ciocolatto e Morango'],
+  [/\b5\s*queijos/gi, 'Cinco Queijos'],
 ]
 const aplicarAliases = nome => ALIASES.reduce((s, [re, sub]) => s.replace(re, sub), String(nome || ''))
 
@@ -92,9 +93,10 @@ function dividirMeioAMeio(nome, quantidade, tamanho) {
   const a = tirarTam(m[1]); const b = tirarTam(m[2])
   if (!a || !b) return null
   const meta = quantidade / 2 // metade pra cada sabor — sem arredondar
+  const tam = tamanho || 'G' // meio-a-meio sem tamanho no combo → assume G (mais comum)
   return [
-    { nome: a, quantidade: meta, tamanho: tamanho ?? null },
-    { nome: b, quantidade: meta, tamanho: tamanho ?? null },
+    { nome: a, quantidade: meta, tamanho: tam },
+    { nome: b, quantidade: meta, tamanho: tam },
   ]
 }
 

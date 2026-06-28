@@ -241,13 +241,34 @@ export function ImportarFoto() {
     }
     return 1 - d[n] / Math.max(m, n)
   }
-  const tokProximo = (w, lista) => lista.some(t => t === w || levSim(w, t) >= 0.84)
+  const LIMIAR_TOK = 0.8 // similaridade mínima entre palavras (tolera 1-2 letras)
+
+  // Sinônimos/equivalências explícitas (nome cru -> nome canônico da ficha/produto).
+  const SINONIMOS = {
+    'fritas': 'Fritas Com Maionese De Bacon',
+    'ceasar': 'Salada Ceasar', 'ceaser': 'Salada Ceasar', 'salada ceaser': 'Salada Ceasar',
+  }
+  const aplicarSinonimo = nome => SINONIMOS[semAcento(nome)] || nome
+
+  // Normaliza variantes de bebida: "sem açúcar"=zero; tira ruído (refrigerante,
+  // antarctica, açúcar); "2 litros"/"2 l" -> "2l". Aplicado nos dois lados.
+  function normVenda(nome) {
+    return semAcento(nome)
+      .replace(/sem\s+acucar/g, 'zero')
+      .replace(/\bacucar(es)?\b/g, ' ')
+      .replace(/\brefrigerante\b/g, ' ')
+      .replace(/\bantar[ct]ica\b/g, ' ')
+      .replace(/(\d+)\s*litros?\b/g, '$1l')
+      .replace(/(\d+)\s*l\b/g, '$1l')
+      .replace(/\s+/g, ' ').trim()
+  }
 
   // Nome "base" do sabor: tira "pizza", "1/2", e marcadores de tamanho.
   function saborBase(nome) {
     return semAcento(nome)
+      .replace(/\([^)]*\)/g, ' ') // tira "(P)", "(Pequeno)", notas entre parênteses
       .replace(/\bpizza\b/g, ' ').replace(/1\/2/g, ' ').replace(/\bmeia\b/g, ' ')
-      .replace(/\bgrande\b|\bpequena\b/g, ' ').replace(/(^|\s)[gp](\s|$)/g, ' ')
+      .replace(/\bgrande\b|\bpequen[ao]\b/g, ' ').replace(/(^|\s)[gp](\s|$)/g, ' ')
       .replace(/\s+/g, ' ').trim()
   }
   function fichaTemTamanho(fichaNomeNorm, tamanho) {
@@ -258,16 +279,23 @@ export function ImportarFoto() {
   // Acha a ficha do sabor NO TAMANHO certo (G/P vem da seção da planilha).
   // Só casa se for do tamanho certo — evita baixar uma "Argentina P" como "G".
   function encontrarFichaSaborTamanho(nome, tamanho) {
-    const palavras = saborBase(nome).split(' ').filter(w => w.length >= 3)
-    if (!palavras.length) return null
-    const f = fichas.find(fi => {
+    const pal = saborBase(nome).split(' ').filter(Boolean)
+    if (!pal.length) return null
+    // Entre as fichas do TAMANHO certo, pega a de MAIOR sobreposição de sabor
+    // (Jaccard + tolerância a digitação). Assim "Mozzarela" não cai na "Mozzarela
+    // ao Pesto com Burrata" — cada uma pega a ficha mais parecida.
+    let melhor = null, best = 0
+    for (const fi of fichas) {
       const fn = semAcento(fi.nome)
-      if (!fichaTemTamanho(fn, tamanho)) return false
-      const toks = fn.split(/\s+/)
-      // toda palavra do sabor aparece (ou é parecida — tolera digitação) na ficha
-      return palavras.every(w => fn.includes(w) || tokProximo(w, toks))
-    })
-    return f?.id ?? null
+      if (!fichaTemTamanho(fn, tamanho)) continue
+      const ftoks = saborBase(fi.nome).split(' ').filter(Boolean)
+      if (!ftoks.length) continue
+      let inter = 0
+      for (const w of new Set(pal)) if (ftoks.some(t => t === w || levSim(w, t) >= LIMIAR_TOK)) inter++
+      const score = inter / new Set([...pal, ...ftoks]).size
+      if (score > best) { best = score; melhor = fi }
+    }
+    return best >= 0.5 ? melhor.id : null
   }
 
   // Match PRECISO por nome (para não-pizza): sobreposição de tokens (Jaccard),
@@ -277,20 +305,18 @@ export function ImportarFoto() {
   const STOP_V = new Set(['de', 'da', 'do', 'dos', 'das', 'e', 'a', 'o', 'os', 'as', 'ao', 'com', 'para', 'no', 'na', 'gratis', 'unidade', 'und', 'un', 'uni', 'ml'])
   const tokensV = s => semAcento(s).replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w && !STOP_V.has(w))
   function matchVendaNome(nome) {
-    const tb = new Set(tokensV(nome))
+    const tbArr = tokensV(normVenda(nome))
+    const tb = new Set(tbArr)
     if (!tb.size) return null
     const cands = [
       ...produtos.map(p => ({ id: p.id, nome: p.nome, tipo: 'produto' })),
       ...fichas.map(f => ({ id: f.id, nome: f.nome, tipo: 'ficha' })),
     ]
-    const tbArr = [...tb]
     let melhor = null, best = 0
     for (const c of cands) {
-      const tc = new Set(tokensV(c.nome)); if (!tc.size) continue
-      // interseção com tolerância a digitação
-      let inter = 0; for (const w of tc) if (tbArr.some(b => b === w || levSim(w, b) >= 0.84)) inter++
-      const uni = new Set([...tc, ...tb]).size
-      const score = inter / uni
+      const tc = new Set(tokensV(normVenda(c.nome))); if (!tc.size) continue
+      let inter = 0; for (const w of tc) if (tbArr.some(b => b === w || levSim(w, b) >= LIMIAR_TOK)) inter++
+      const score = inter / new Set([...tc, ...tb]).size
       if (score > best) { best = score; melhor = c }
     }
     return best >= 0.5 ? melhor : null
@@ -305,9 +331,11 @@ export function ImportarFoto() {
   }
 
   function construirItemVenda(raw) {
-    const base = construirItem({ nome: raw.nome, quantidade: raw.quantidade }, {})
-    // Mostra o tamanho na revisão (ex: "Argentina (G)") pra não confundir.
-    if (raw.tamanho) base.nome = `${raw.nome} (${raw.tamanho})`
+    const nomeSin = aplicarSinonimo(raw.nome) // equivalências explícitas (fritas, ceasar...)
+    const base = construirItem({ nome: nomeSin, quantidade: raw.quantidade }, {})
+    // Mostra o tamanho na revisão (ex: "Argentina (G)") sem duplicar se o nome
+    // já tinha "(P)"/"(G)".
+    if (raw.tamanho) base.nome = `${raw.nome.replace(/\s*\([gp]\)\s*$/i, '').trim()} (${raw.tamanho})`
     if (raw.tamanho) {
       const fichaId = encontrarFichaSaborTamanho(raw.nome, raw.tamanho)
       if (fichaId) return { ...base, fichaId, produtoId: null }
@@ -322,7 +350,7 @@ export function ImportarFoto() {
     }
     // Não-pizza (bebida/prato/borda/pierzitta): match preciso por nome (Jaccard),
     // que separa as variantes de Coca/Guaraná em vez de colapsar numa só.
-    const m = matchVendaNome(raw.nome)
+    const m = matchVendaNome(nomeSin)
     return {
       ...base,
       fichaId: m && m.tipo === 'ficha' ? m.id : null,
