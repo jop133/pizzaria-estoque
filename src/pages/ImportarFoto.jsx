@@ -253,14 +253,16 @@ export function ImportarFoto() {
   // Normaliza variantes de bebida: "sem açúcar"=zero; tira ruído (refrigerante,
   // antarctica, açúcar); "2 litros"/"2 l" -> "2l". Aplicado nos dois lados.
   function normVenda(nome) {
-    return semAcento(nome)
+    let s = semAcento(nome)
       .replace(/sem\s+acucar/g, 'zero')
       .replace(/\bacucar(es)?\b/g, ' ')
       .replace(/\brefrigerante\b/g, ' ')
       .replace(/\bantar[ct]ica\b/g, ' ')
       .replace(/(\d+)\s*litros?\b/g, '$1l')
       .replace(/(\d+)\s*l\b/g, '$1l')
-      .replace(/\s+/g, ' ').trim()
+      .replace(/pierzz?it+a|pizzerit+a/g, 'pierzitta') // grafias do pierzitta (1 z, 2 z, pizzerita)
+    if (/borda/.test(s)) s = s.replace(/\boriginal\b/g, ' ') // "Borda X Original" = "Borda X"
+    return s.replace(/\s+/g, ' ').trim()
   }
 
   // Nome "base" do sabor: tira "pizza", "1/2", e marcadores de tamanho.
