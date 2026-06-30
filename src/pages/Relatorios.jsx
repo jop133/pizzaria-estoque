@@ -1,4 +1,5 @@
 import { useLancamentos, useProdutos } from '../hooks/useEstoque'
+import { formatBRL } from '../lib/custos'
 import { exportarEstoqueCSV, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -40,6 +41,43 @@ export function Relatorios() {
   })
   const catData = Object.entries(catMap).map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }))
 
+  // --- Relatório de Contagem (ajustes de inventário num período) ---------------
+  // Consolida os lançamentos tipo 'ajuste' entre data inicial e final (a contagem
+  // pode atravessar dias). Δ vem da observação "Contagem: X → Y (±Δ)".
+  const fmtData = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const [contIni, setContIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
+  const [contFim, setContFim] = useState(() => fmtData(new Date()))
+  const round3 = v => Math.round((v || 0) * 1000) / 1000
+  const parseDelta = obs => {
+    const m = (obs || '').match(/\(([+-]?\d+(?:[.,]\d+)?)\)/)
+    return m ? parseFloat(m[1].replace(',', '.')) : 0
+  }
+  const prodMap = Object.fromEntries(produtos.map(p => [p.id, p]))
+  const iniD = new Date(contIni + 'T00:00:00')
+  const fimD = new Date(contFim + 'T23:59:59.999')
+  const contMap = {}
+  for (const l of lancamentos) {
+    if (l.tipo !== 'ajuste' || l.produto_id == null) continue
+    const d = new Date(l.data)
+    if (d < iniD || d > fimD) continue
+    if (!contMap[l.produto_id]) contMap[l.produto_id] = { id: l.produto_id, nome: l.nomeProduto || prodMap[l.produto_id]?.nome || 'Produto', netD: 0, depois: l.quantidade, data: l.data }
+    const g = contMap[l.produto_id]
+    g.netD += parseDelta(l.observacao)
+    if (d >= new Date(g.data)) { g.depois = l.quantidade; g.data = l.data } // último = contagem final
+  }
+  const contRows = Object.values(contMap)
+    .map(g => {
+      const p = prodMap[g.id]
+      const netD = round3(g.netD)
+      const rs = netD * (p?.preco || 0)
+      return { ...g, netD, antes: round3(g.depois - netD), unidade: p?.unidade || '', rs }
+    })
+    .filter(r => r.netD !== 0)
+    .sort((a, b) => Math.abs(b.rs) - Math.abs(a.rs))
+  const contFalta = contRows.filter(r => r.netD < 0).length
+  const contSobra = contRows.filter(r => r.netD > 0).length
+  const contValor = contRows.reduce((s, r) => s + r.rs, 0)
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -63,6 +101,57 @@ export function Relatorios() {
         <button onClick={() => exportarEstoqueCSV(produtos)} className="btn-secondary text-sm">📤 Estoque CSV</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
         <button onClick={() => exportarHistoricoCSV(lancamentos)} className="btn-secondary text-sm">📤 Histórico CSV</button>
+      </div>
+
+      {/* Relatório de Contagem (período) */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="font-semibold text-gray-700">📋 Relatório de Contagem</h2>
+          <div className="flex items-center gap-2 text-sm">
+            <input type="date" value={contIni} max={contFim} onChange={e => setContIni(e.target.value)} className="input w-auto" />
+            <span className="text-gray-400">até</span>
+            <input type="date" value={contFim} min={contIni} onChange={e => setContFim(e.target.value)} className="input w-auto" />
+          </div>
+        </div>
+
+        {contRows.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-4">Nenhum ajuste de contagem no período selecionado.</p>
+        ) : (
+          <>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+              <span className="font-medium text-gray-700">{contRows.length} insumo(s) ajustado(s)</span>
+              <span className="text-red-600">🔴 {contFalta} falta</span>
+              <span className="text-green-600">🟢 {contSobra} sobra</span>
+              <span className={`font-semibold ${contValor < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                Valor líquido: {formatBRL(contValor)}
+              </span>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
+                  <tr>
+                    <th className="text-left px-3 py-2">Insumo</th>
+                    <th className="text-right px-3 py-2 whitespace-nowrap">Antes → Depois</th>
+                    <th className="text-right px-3 py-2">Δ</th>
+                    <th className="text-right px-3 py-2">R$</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {contRows.map(r => (
+                    <tr key={r.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2 font-medium text-gray-800">{r.nome}</td>
+                      <td className="px-3 py-2 text-right font-mono text-gray-500 text-xs whitespace-nowrap">{r.antes} → {r.depois} {r.unidade}</td>
+                      <td className={`px-3 py-2 text-right font-mono font-semibold ${r.netD < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {r.netD > 0 ? '+' : ''}{r.netD} {r.unidade}
+                      </td>
+                      <td className={`px-3 py-2 text-right font-mono ${r.rs < 0 ? 'text-red-600' : 'text-green-600'}`}>{formatBRL(r.rs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
 
       {consumoData.length > 0 && (
