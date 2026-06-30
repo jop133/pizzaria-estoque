@@ -3,12 +3,37 @@ import { formatBRL } from '../lib/custos'
 import { exportarEstoqueCSV, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell
 } from 'recharts'
 import { useState } from 'react'
 import { Modal } from '../components/Modal'
 
 const CORES = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899']
+
+// Cor fixa por categoria (consistente entre sessões; paleta harmônica).
+const COR_CATEGORIA = {
+  'Laticínios e Frios': '#fbbf24',
+  'Proteínas': '#ef4444',
+  'Hortifruti': '#22c55e',
+  'Mercearia': '#b45309',
+  'Produções Internas': '#8b5cf6',
+  'Bebidas': '#3b82f6',
+  'Embalagens e Etiquetas': '#f97316',
+  'Limpeza': '#06b6d4',
+  'Porcionados': '#ec4899',
+  'Outros': '#94a3b8',
+}
+const PALETA_EXTRA = ['#14b8a6', '#eab308', '#a855f7', '#f43f5e', '#0ea5e9']
+const corDaCategoria = (name, i) => COR_CATEGORIA[name] || PALETA_EXTRA[i % PALETA_EXTRA.length]
+
+// Categorias antigas → novas (evita fatias duplicadas na rosca).
+const NORMALIZAR_CAT = {
+  'Bebida': 'Bebidas',
+  'Embalagem': 'Embalagens e Etiquetas',
+  'Vegetal': 'Hortifruti',
+  'Produção': 'Produções Internas',
+  'Produções': 'Produções Internas',
+}
 
 export function Relatorios() {
   const lancamentos = useLancamentos()
@@ -36,12 +61,30 @@ export function Relatorios() {
     .slice(0, 10)
     .map(([name, value]) => ({ name, value }))
 
-  // Estoque por categoria
+  // Estoque por categoria (quantidade). Unifica categorias antigas nas novas
+  // e agrupa fatias minúsculas (<2% do total) numa fatia "Outros".
   const catMap = {}
   produtos.forEach(p => {
-    catMap[p.categoria || 'Outros'] = (catMap[p.categoria || 'Outros'] || 0) + p.quantidade
+    const cat = NORMALIZAR_CAT[p.categoria] || p.categoria || 'Outros'
+    catMap[cat] = (catMap[cat] || 0) + (p.quantidade || 0)
   })
-  const catData = Object.entries(catMap).map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }))
+  const catTotal = Object.values(catMap).reduce((s, v) => s + v, 0)
+  const catData = []
+  let catOutros = 0
+  Object.entries(catMap)
+    .map(([name, value]) => ({ name, value: parseFloat(value.toFixed(2)) }))
+    .filter(d => d.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .forEach(d => {
+      if (catTotal > 0 && d.name !== 'Outros' && d.value / catTotal < 0.02) catOutros += d.value
+      else catData.push(d)
+    })
+  if (catOutros > 0) {
+    const i = catData.findIndex(d => d.name === 'Outros')
+    if (i >= 0) catData[i] = { name: 'Outros', value: parseFloat((catData[i].value + catOutros).toFixed(2)) }
+    else catData.push({ name: 'Outros', value: parseFloat(catOutros.toFixed(2)) })
+    catData.sort((a, b) => b.value - a.value)
+  }
 
   // --- Relatório de Contagem (ajustes de inventário num período) ---------------
   // Consolida os lançamentos tipo 'ajuste' entre data inicial e final (a contagem
@@ -177,15 +220,35 @@ export function Relatorios() {
       {catData.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <h2 className="font-semibold text-gray-700 mb-4">Estoque por Categoria</h2>
-          <ResponsiveContainer width="100%" height={280}>
-            <PieChart>
-              <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}>
-                {catData.map((_, i) => <Cell key={i} fill={CORES[i % CORES.length]} />)}
-              </Pie>
-              <Tooltip />
-              <Legend />
-            </PieChart>
-          </ResponsiveContainer>
+          <div className="flex flex-col md:flex-row md:items-center gap-4">
+            <div className="relative mx-auto shrink-0" style={{ width: 220, height: 220 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie data={catData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={62} outerRadius={95} paddingAngle={2} stroke="none">
+                    {catData.map((d, i) => <Cell key={d.name} fill={corDaCategoria(d.name, i)} />)}
+                  </Pie>
+                  <Tooltip formatter={(v, n) => [v, n]} />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-3xl font-bold text-gray-800">{catData.length}</span>
+                <span className="text-xs text-gray-400">categorias</span>
+              </div>
+            </div>
+            <ul className="flex-1 space-y-1.5 min-w-0">
+              {catData.map((d, i) => {
+                const pct = catTotal > 0 ? (d.value / catTotal) * 100 : 0
+                return (
+                  <li key={d.name} className="flex items-center gap-2 text-sm">
+                    <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: corDaCategoria(d.name, i) }} />
+                    <span className="text-gray-700 truncate flex-1">{d.name}</span>
+                    <span className="font-mono text-gray-400 text-xs shrink-0">{d.value}</span>
+                    <span className="font-mono text-gray-800 text-xs shrink-0 w-10 text-right">{pct.toFixed(0)}%</span>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
         </div>
       )}
 
