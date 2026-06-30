@@ -61,24 +61,6 @@ export function Dashboard() {
         <Card label="Lançamentos (7d)" value={ultimos7dias.length} color="orange" />
       </div>
 
-      {abaixoMinimo.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <h2 className="text-red-700 font-semibold mb-3 flex items-center gap-2">
-            <span>⚠️</span> Estoque Baixo — Atenção
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {abaixoMinimo.map(p => (
-              <div key={p.id} className="bg-white border border-red-200 rounded-lg px-3 py-2">
-                <p className="font-medium text-gray-800 text-sm">{p.nome}</p>
-                <p className="text-xs text-red-600">
-                  {p.quantidade} {p.unidade} / mín. {p.estoque_minimo} {p.unidade}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {chartData.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
           <h2 className="font-semibold text-gray-700 mb-4">Top Consumo (últimos 7 dias)</h2>
