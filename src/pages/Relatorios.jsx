@@ -62,7 +62,8 @@ export function Relatorios() {
     .map(([name, value]) => ({ name, value }))
 
   // Estoque por categoria (quantidade). Unifica categorias antigas nas novas
-  // e agrupa fatias minúsculas (<2% do total) numa fatia "Outros".
+  // e agrupa fatias minúsculas (<1% do total) numa fatia "Outros".
+  // Exatamente 1% (ou mais) mantém o nome; abaixo de 1% vai pra "Outros".
   const catMap = {}
   produtos.forEach(p => {
     const cat = NORMALIZAR_CAT[p.categoria] || p.categoria || 'Outros'
@@ -76,7 +77,7 @@ export function Relatorios() {
     .filter(d => d.value > 0)
     .sort((a, b) => b.value - a.value)
     .forEach(d => {
-      if (catTotal > 0 && d.name !== 'Outros' && d.value / catTotal < 0.02) catOutros += d.value
+      if (catTotal > 0 && d.name !== 'Outros' && d.value / catTotal < 0.01) catOutros += d.value
       else catData.push(d)
     })
   if (catOutros > 0) {
