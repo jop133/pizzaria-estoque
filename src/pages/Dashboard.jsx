@@ -4,6 +4,8 @@ import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
 } from 'recharts'
+import { useState } from 'react'
+import { Search } from 'lucide-react'
 
 export function Dashboard() {
   const produtos = useProdutos()
@@ -11,6 +13,7 @@ export function Dashboard() {
   const abaixoMinimo = useProdutosAbaixoMinimo()
   const fichas = useFichas()
   const ingredientes = useTodosIngredientes()
+  const [buscaValor, setBuscaValor] = useState('')
 
   const totalProdutos = produtos.length
   const totalItens = produtos.reduce((s, p) => s + (p.quantidade || 0), 0)
@@ -98,13 +101,28 @@ export function Dashboard() {
             </div>
 
             <p className="text-xs font-medium text-gray-500 uppercase mb-1">Por produto</p>
+            <div className="relative mb-2">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                placeholder="Buscar produto..."
+                value={buscaValor}
+                onChange={e => setBuscaValor(e.target.value)}
+                className="input pl-9"
+              />
+            </div>
             <div className="space-y-1 max-h-72 overflow-y-auto">
-              {valorProdutos.map(x => (
-                <div key={x.id} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
-                  <span className="text-gray-600 truncate pr-2">{x.nome}</span>
-                  <span className="font-mono text-gray-800 shrink-0">{formatBRL(x.valor)}</span>
-                </div>
-              ))}
+              {(() => {
+                const lista = valorProdutos.filter(x => x.nome.toLowerCase().includes(buscaValor.toLowerCase()))
+                if (lista.length === 0) {
+                  return <p className="text-sm text-gray-400 py-4 text-center">Nenhum produto encontrado.</p>
+                }
+                return lista.map(x => (
+                  <div key={x.id} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
+                    <span className="text-gray-600 truncate pr-2">{x.nome}</span>
+                    <span className="font-mono text-gray-800 shrink-0">{formatBRL(x.valor)}</span>
+                  </div>
+                ))
+              })()}
             </div>
           </>
         )}
