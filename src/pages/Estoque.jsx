@@ -2,7 +2,7 @@ import { useState, useRef } from 'react'
 import { useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { supabase } from '../lib/supabase'
 import { session } from '../lib/session'
-import { importarProdutosCSV, exportarEstoqueCSV, exportarEstoquePDF } from '../services/importExport'
+import { importarProdutosCSV } from '../services/importExport'
 import { fatorUnidade, converterUnidade } from '../lib/unidades'
 import { criarCalculadoraDeCusto, ehProdutoDeProducao, formatBRL } from '../lib/custos'
 import { registrarEvento } from '../services/estoque'
@@ -602,8 +602,6 @@ export function Estoque() {
             💰 {precoFase === 'lendo' ? 'Lendo...' : 'Importar Preços'}
           </button>
           <button onClick={() => fileRef.current.click()} className="btn-secondary text-sm">📥 Importar CSV</button>
-          <button onClick={() => exportarEstoqueCSV(filtrados)} className="btn-secondary text-sm">📤 CSV</button>
-          <button onClick={() => exportarEstoquePDF(filtrados)} className="btn-secondary text-sm">📄 PDF</button>
           <button onClick={abrirNovo} className="btn-primary text-sm">+ Novo Produto</button>
         </div>
         <input ref={fileRef} type="file" accept=".csv" className="hidden" onChange={importar} />
