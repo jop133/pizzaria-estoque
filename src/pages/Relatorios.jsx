@@ -6,6 +6,7 @@ import {
   PieChart, Pie, Cell, LabelList
 } from 'recharts'
 import { useState } from 'react'
+import { Search } from 'lucide-react'
 import { Modal } from '../components/Modal'
 
 // Cor fixa por categoria (consistente entre sessões; paleta harmônica).
@@ -142,10 +143,12 @@ export function Relatorios() {
   const contSobra = contRows.filter(r => r.netD > 0).length
   const contValor = contRows.reduce((s, r) => s + r.rs, 0)
 
-  // Filtro da lista (Tudo / Só faltas / Só sobras) e atalhos de período.
+  // Filtro da lista (Tudo / Só faltas / Só sobras), busca por nome e atalhos de período.
   const [filtroCont, setFiltroCont] = useState('todos')
+  const [buscaCont, setBuscaCont] = useState('')
   const contRowsFiltrados = contRows.filter(r =>
-    filtroCont === 'todos' || (filtroCont === 'falta' ? r.netD < 0 : r.netD > 0)
+    (filtroCont === 'todos' || (filtroCont === 'falta' ? r.netD < 0 : r.netD > 0)) &&
+    (!buscaCont || r.nome.toLowerCase().includes(buscaCont.toLowerCase()))
   )
   const presetDias = dias => {
     setContIni(fmtData(new Date(Date.now() - dias * 864e5)))
@@ -248,10 +251,21 @@ export function Relatorios() {
                   ))}
                 </div>
 
+                {/* Busca por nome */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    placeholder="Buscar insumo..."
+                    value={buscaCont}
+                    onChange={e => setBuscaCont(e.target.value)}
+                    className="input pl-9"
+                  />
+                </div>
+
                 {/* Lista em cartões (rola; cabeçalho acima fica fixo) */}
                 <div className="space-y-2 max-h-[45vh] overflow-y-auto -mx-1 px-1">
                   {contRowsFiltrados.length === 0 ? (
-                    <p className="text-sm text-gray-400 text-center py-6">Nenhum item nesse filtro.</p>
+                    <p className="text-sm text-gray-400 text-center py-6">Nenhum item encontrado.</p>
                   ) : contRowsFiltrados.map(r => (
                     <div key={r.id} className="border border-gray-200 rounded-xl p-3 flex items-start justify-between gap-2">
                       <div className="min-w-0">
