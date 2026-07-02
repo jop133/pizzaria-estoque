@@ -1,6 +1,6 @@
 import { useLancamentos, useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import { exportarEstoqueXLSX, exportarEstoquePDF } from '../services/importExport'
+import { exportarEstoqueXLSX, exportarVendasXLSX, exportarEstoquePDF } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LabelList
@@ -174,30 +174,35 @@ export function Relatorios() {
   // --- Relatório de Vendas (itens vendidos num período) ------------------------
   // Venda = saída por ficha (pratos) + saída manual (inclui bebidas). Consolida
   // por item; mostra quantidade e o custo dos insumos (não há preço de venda).
+  const calcularVendas = (iniStr, fimStr) => {
+    const ini = new Date(iniStr + 'T00:00:00')
+    const fim = new Date(fimStr + 'T23:59:59.999')
+    const map = {}
+    for (const l of lancamentos) {
+      if (l.tipo !== 'saida_ficha' && l.tipo !== 'saida_manual') continue
+      const d = new Date(l.data)
+      if (d < ini || d > fim) continue
+      const ehFicha = l.tipo === 'saida_ficha'
+      const nome = (ehFicha ? l.nomeFicha : l.nomeProduto) || 'Sem nome'
+      const key = (ehFicha ? 'f:' : 'p:') + nome
+      const qtd = l.quantidade || 0
+      const valor = ehFicha ? qtd * custoDaFicha(l.ficha_id) : qtd * custoUnit(l.produto_id)
+      if (!map[key]) map[key] = { key, nome, ehFicha, unidade: ehFicha ? '' : (prodMap[l.produto_id]?.unidade || ''), qtd: 0, valor: 0 }
+      map[key].qtd += qtd
+      map[key].valor += valor
+    }
+    return Object.values(map)
+      .map(v => ({ ...v, qtd: round3(v.qtd), valor: Math.round(v.valor * 100) / 100 }))
+      .filter(v => v.qtd > 0)
+  }
+
+  // Relatório de Vendas na tela.
   const [mostrarVendas, setMostrarVendas] = useState(false)
   const [vendaIni, setVendaIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
   const [vendaFim, setVendaFim] = useState(() => fmtData(new Date()))
   const [buscaVenda, setBuscaVenda] = useState('')
   const [metricaVenda, setMetricaVenda] = useState('qtd') // qtd | valor
-  const vendaIniD = new Date(vendaIni + 'T00:00:00')
-  const vendaFimD = new Date(vendaFim + 'T23:59:59.999')
-  const vendaMap = {}
-  for (const l of lancamentos) {
-    if (l.tipo !== 'saida_ficha' && l.tipo !== 'saida_manual') continue
-    const d = new Date(l.data)
-    if (d < vendaIniD || d > vendaFimD) continue
-    const ehFicha = l.tipo === 'saida_ficha'
-    const nome = (ehFicha ? l.nomeFicha : l.nomeProduto) || 'Sem nome'
-    const key = (ehFicha ? 'f:' : 'p:') + nome
-    const qtd = l.quantidade || 0
-    const valor = ehFicha ? qtd * custoDaFicha(l.ficha_id) : qtd * custoUnit(l.produto_id)
-    if (!vendaMap[key]) vendaMap[key] = { key, nome, ehFicha, unidade: ehFicha ? '' : (prodMap[l.produto_id]?.unidade || ''), qtd: 0, valor: 0 }
-    vendaMap[key].qtd += qtd
-    vendaMap[key].valor += valor
-  }
-  const vendaRows = Object.values(vendaMap)
-    .map(v => ({ ...v, qtd: round3(v.qtd), valor: Math.round(v.valor * 100) / 100 }))
-    .filter(v => v.qtd > 0)
+  const vendaRows = calcularVendas(vendaIni, vendaFim)
     .sort((a, b) => metricaVenda === 'valor' ? b.valor - a.valor : b.qtd - a.qtd)
   const vendaTotalUnid = round3(vendaRows.reduce((s, v) => s + v.qtd, 0))
   const vendaTotalValor = Math.round(vendaRows.reduce((s, v) => s + v.valor, 0) * 100) / 100
@@ -210,6 +215,32 @@ export function Relatorios() {
     const h = new Date()
     setVendaIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
     setVendaFim(fmtData(h))
+  }
+
+  // Exportar Vendas em Excel — período escolhido num modal próprio.
+  const [mostrarVendasExcel, setMostrarVendasExcel] = useState(false)
+  const [xlsIni, setXlsIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
+  const [xlsFim, setXlsFim] = useState(() => fmtData(new Date()))
+  const presetXlsDias = dias => {
+    setXlsIni(fmtData(new Date(Date.now() - dias * 864e5)))
+    setXlsFim(fmtData(new Date()))
+  }
+  const presetXlsMes = () => {
+    const h = new Date()
+    setXlsIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
+    setXlsFim(fmtData(h))
+  }
+  const baixarVendasExcel = async () => {
+    const rows = calcularVendas(xlsIni, xlsFim)
+    if (rows.length === 0) return toast.error('Nenhuma venda no período selecionado')
+    const t = toast.loading('Gerando Excel...')
+    try {
+      await exportarVendasXLSX(rows, { ini: xlsIni, fim: xlsFim })
+      toast.success('Excel gerado!', { id: t })
+      setMostrarVendasExcel(false)
+    } catch {
+      toast.error('Falha ao gerar o Excel', { id: t })
+    }
   }
 
   return (
@@ -235,8 +266,34 @@ export function Relatorios() {
         <button onClick={() => setMostrarContagem(true)} className="btn-secondary text-sm">📋 Relatório de Contagem</button>
         <button onClick={() => setMostrarVendas(true)} className="btn-secondary text-sm">🧾 Relatório de Vendas</button>
         <button onClick={baixarEstoqueExcel} className="btn-secondary text-sm">📊 Estoque Excel</button>
+        <button onClick={() => setMostrarVendasExcel(true)} className="btn-secondary text-sm">📊 Vendas Excel</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
       </div>
+
+      {/* Vendas Excel — escolha do período antes de baixar */}
+      {mostrarVendasExcel && (
+        <Modal title="📊 Vendas Excel" onClose={() => setMostrarVendasExcel(false)}>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">Escolha o período das vendas que deseja exportar:</p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => presetXlsDias(7)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">7 dias</button>
+              <button onClick={() => presetXlsDias(30)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">30 dias</button>
+              <button onClick={presetXlsMes} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">Este mês</button>
+            </div>
+            <div className="flex flex-wrap items-end gap-3 text-sm">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">De</span>
+                <input type="date" value={xlsIni} max={xlsFim} onChange={e => setXlsIni(e.target.value)} className="input w-auto" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Até</span>
+                <input type="date" value={xlsFim} min={xlsIni} onChange={e => setXlsFim(e.target.value)} className="input w-auto" />
+              </label>
+            </div>
+            <button onClick={baixarVendasExcel} className="btn-primary w-full">📥 Baixar Excel</button>
+          </div>
+        </Modal>
+      )}
 
       {/* Relatório de Contagem (período) — abre em tela própria */}
       {mostrarContagem && (
