@@ -1,9 +1,5 @@
 import { useProdutos, useLancamentos, useProdutosAbaixoMinimo, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
-import { TIPOS_MOVIMENTACAO } from '../lib/lancamentos'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
-} from 'recharts'
 import { useState } from 'react'
 import { Search } from 'lucide-react'
 
@@ -41,18 +37,6 @@ export function Dashboard() {
     return (agora - d) / (1000 * 60 * 60 * 24) <= 7
   })
 
-  const consumoPorProduto = {}
-  ultimos7dias
-    .filter(l => TIPOS_MOVIMENTACAO.includes(l.tipo) && l.tipo !== 'entrada')
-    .forEach(l => {
-      const key = l.nomeProduto || l.nomeFicha || 'Sem nome'
-      consumoPorProduto[key] = (consumoPorProduto[key] || 0) + l.quantidade
-    })
-  const chartData = Object.entries(consumoPorProduto)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([name, value]) => ({ name, value }))
-
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
@@ -63,24 +47,6 @@ export function Dashboard() {
         <Card label="Abaixo do Mínimo" value={abaixoMinimo.length} color={abaixoMinimo.length > 0 ? 'red' : 'green'} />
         <Card label="Lançamentos (7d)" value={ultimos7dias.length} color="orange" />
       </div>
-
-      {chartData.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h2 className="font-semibold text-gray-700 mb-4">Top Consumo (últimos 7 dias)</h2>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={chartData} margin={{ top: 0, right: 10, left: -20, bottom: 60 }}>
-              <XAxis dataKey="name" angle={-35} textAnchor="end" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {chartData.map((_, i) => (
-                  <Cell key={i} fill={`hsl(${200 + i * 20}, 70%, 50%)`} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-gray-700 mb-1">💰 Valor em estoque</h2>
