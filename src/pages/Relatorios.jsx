@@ -160,6 +160,47 @@ export function Relatorios() {
     setContFim(fmtData(h))
   }
 
+  // --- Relatório de Vendas (itens vendidos num período) ------------------------
+  // Venda = saída por ficha (pratos) + saída manual (inclui bebidas). Consolida
+  // por item; mostra quantidade e o custo dos insumos (não há preço de venda).
+  const [mostrarVendas, setMostrarVendas] = useState(false)
+  const [vendaIni, setVendaIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
+  const [vendaFim, setVendaFim] = useState(() => fmtData(new Date()))
+  const [buscaVenda, setBuscaVenda] = useState('')
+  const [metricaVenda, setMetricaVenda] = useState('qtd') // qtd | valor
+  const vendaIniD = new Date(vendaIni + 'T00:00:00')
+  const vendaFimD = new Date(vendaFim + 'T23:59:59.999')
+  const vendaMap = {}
+  for (const l of lancamentos) {
+    if (l.tipo !== 'saida_ficha' && l.tipo !== 'saida_manual') continue
+    const d = new Date(l.data)
+    if (d < vendaIniD || d > vendaFimD) continue
+    const ehFicha = l.tipo === 'saida_ficha'
+    const nome = (ehFicha ? l.nomeFicha : l.nomeProduto) || 'Sem nome'
+    const key = (ehFicha ? 'f:' : 'p:') + nome
+    const qtd = l.quantidade || 0
+    const valor = ehFicha ? qtd * custoDaFicha(l.ficha_id) : qtd * custoUnit(l.produto_id)
+    if (!vendaMap[key]) vendaMap[key] = { key, nome, ehFicha, unidade: ehFicha ? '' : (prodMap[l.produto_id]?.unidade || ''), qtd: 0, valor: 0 }
+    vendaMap[key].qtd += qtd
+    vendaMap[key].valor += valor
+  }
+  const vendaRows = Object.values(vendaMap)
+    .map(v => ({ ...v, qtd: round3(v.qtd), valor: Math.round(v.valor * 100) / 100 }))
+    .filter(v => v.qtd > 0)
+    .sort((a, b) => metricaVenda === 'valor' ? b.valor - a.valor : b.qtd - a.qtd)
+  const vendaTotalUnid = round3(vendaRows.reduce((s, v) => s + v.qtd, 0))
+  const vendaTotalValor = Math.round(vendaRows.reduce((s, v) => s + v.valor, 0) * 100) / 100
+  const vendaRowsFiltrados = vendaRows.filter(v => !buscaVenda || v.nome.toLowerCase().includes(buscaVenda.toLowerCase()))
+  const presetVendaDias = dias => {
+    setVendaIni(fmtData(new Date(Date.now() - dias * 864e5)))
+    setVendaFim(fmtData(new Date()))
+  }
+  const presetVendaMes = () => {
+    const h = new Date()
+    setVendaIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
+    setVendaFim(fmtData(h))
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -181,6 +222,7 @@ export function Relatorios() {
 
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setMostrarContagem(true)} className="btn-secondary text-sm">📋 Relatório de Contagem</button>
+        <button onClick={() => setMostrarVendas(true)} className="btn-secondary text-sm">🧾 Relatório de Vendas</button>
         <button onClick={() => exportarEstoqueCSV(produtos)} className="btn-secondary text-sm">📤 Estoque CSV</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
         <button onClick={() => exportarHistoricoCSV(lancamentos)} className="btn-secondary text-sm">📤 Histórico CSV</button>
@@ -277,6 +319,94 @@ export function Relatorios() {
                           {r.netD < 0 ? '↓ faltou' : '↑ sobrou'} {Math.abs(r.netD)} {r.unidade}
                         </p>
                         <p className={`text-xs font-mono ${r.rs < 0 ? 'text-red-600' : 'text-green-600'}`}>{formatBRL(r.rs)}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Relatório de Vendas (período) — abre em tela própria */}
+      {mostrarVendas && (
+        <Modal title="🧾 Relatório de Vendas" onClose={() => setMostrarVendas(false)} maxWidth="max-w-2xl">
+          <div className="space-y-4">
+            {/* Período: atalhos + intervalo */}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => presetVendaDias(7)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">7 dias</button>
+                <button onClick={() => presetVendaDias(30)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">30 dias</button>
+                <button onClick={presetVendaMes} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">Este mês</button>
+              </div>
+              <div className="flex flex-wrap items-end gap-3 text-sm">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">De</span>
+                  <input type="date" value={vendaIni} max={vendaFim} onChange={e => setVendaIni(e.target.value)} className="input w-auto" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">Até</span>
+                  <input type="date" value={vendaFim} min={vendaIni} onChange={e => setVendaFim(e.target.value)} className="input w-auto" />
+                </label>
+              </div>
+            </div>
+
+            {vendaRows.length === 0 ? (
+              <div className="text-center py-10">
+                <p className="text-4xl mb-2">🧾</p>
+                <p className="text-sm text-gray-600 font-medium">Nenhuma venda no período.</p>
+                <p className="text-xs text-gray-400 mt-1">Lance saídas por ficha ou importe a planilha de vendas para ver o relatório aqui.</p>
+              </div>
+            ) : (
+              <>
+                {/* Destaque: total vendido */}
+                <div className="rounded-xl p-4 bg-red-50">
+                  <p className="text-xs font-medium uppercase text-red-700">Itens vendidos no período</p>
+                  <p className="text-3xl font-bold text-red-800">{vendaTotalUnid}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{vendaRows.length} item(ns) diferente(s) · custo total {formatBRL(vendaTotalValor)}</p>
+                </div>
+
+                {/* Métrica */}
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1 text-sm">
+                  {[['qtd', 'Quantidade'], ['valor', 'Custo R$']].map(([v, l]) => (
+                    <button
+                      key={v}
+                      onClick={() => setMetricaVenda(v)}
+                      className={`flex-1 py-1.5 rounded-md transition-colors ${metricaVenda === v ? 'bg-white shadow-sm text-gray-800 font-medium' : 'text-gray-500'}`}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Busca por nome */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    placeholder="Buscar item..."
+                    value={buscaVenda}
+                    onChange={e => setBuscaVenda(e.target.value)}
+                    className="input pl-9"
+                  />
+                </div>
+
+                {/* Lista em cartões (rola; cabeçalho acima fica fixo) */}
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto -mx-1 px-1">
+                  {vendaRowsFiltrados.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-6">Nenhum item encontrado.</p>
+                  ) : vendaRowsFiltrados.map(v => (
+                    <div key={v.key} className="border border-gray-200 rounded-xl p-3 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-800 truncate">{v.ehFicha ? '🍕 ' : '📦 '}{v.nome}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-semibold text-gray-800">
+                          {metricaVenda === 'valor' ? formatBRL(v.valor) : `${v.qtd}${v.unidade ? ' ' + v.unidade : ''}`}
+                        </p>
+                        <p className="text-xs font-mono text-gray-400">
+                          {metricaVenda === 'valor' ? `${v.qtd}${v.unidade ? ' ' + v.unidade : ''} vendidos` : formatBRL(v.valor)}
+                        </p>
                       </div>
                     </div>
                   ))}
