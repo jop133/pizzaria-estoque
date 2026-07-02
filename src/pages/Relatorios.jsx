@@ -1,6 +1,6 @@
 import { useLancamentos, useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import { exportarEstoqueXLSX, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
+import { exportarEstoqueXLSX, exportarEstoquePDF } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LabelList
@@ -236,7 +236,6 @@ export function Relatorios() {
         <button onClick={() => setMostrarVendas(true)} className="btn-secondary text-sm">🧾 Relatório de Vendas</button>
         <button onClick={baixarEstoqueExcel} className="btn-secondary text-sm">📊 Estoque Excel</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
-        <button onClick={() => exportarHistoricoCSV(lancamentos)} className="btn-secondary text-sm">📤 Histórico CSV</button>
       </div>
 
       {/* Relatório de Contagem (período) — abre em tela própria */}
