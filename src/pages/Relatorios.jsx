@@ -1,6 +1,6 @@
 import { useLancamentos, useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import { exportarEstoqueCSV, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
+import { exportarEstoqueXLSX, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LabelList
@@ -8,6 +8,7 @@ import {
 import { useState } from 'react'
 import { Search } from 'lucide-react'
 import { Modal } from '../components/Modal'
+import toast from 'react-hot-toast'
 
 // Cor fixa por categoria (consistente entre sessões; paleta harmônica).
 const COR_CATEGORIA = {
@@ -41,6 +42,16 @@ export function Relatorios() {
   const ingredientes = useTodosIngredientes()
   const [periodo, setPeriodo] = useState('7')
   const [mostrarContagem, setMostrarContagem] = useState(false)
+
+  const baixarEstoqueExcel = async () => {
+    const t = toast.loading('Gerando Excel...')
+    try {
+      await exportarEstoqueXLSX(produtos)
+      toast.success('Excel gerado!', { id: t })
+    } catch {
+      toast.error('Falha ao gerar o Excel', { id: t })
+    }
+  }
   const [periodoConsumo, setPeriodoConsumo] = useState('7')
   const [metricaConsumo, setMetricaConsumo] = useState('qtd')
 
@@ -223,7 +234,7 @@ export function Relatorios() {
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setMostrarContagem(true)} className="btn-secondary text-sm">📋 Relatório de Contagem</button>
         <button onClick={() => setMostrarVendas(true)} className="btn-secondary text-sm">🧾 Relatório de Vendas</button>
-        <button onClick={() => exportarEstoqueCSV(produtos)} className="btn-secondary text-sm">📤 Estoque CSV</button>
+        <button onClick={baixarEstoqueExcel} className="btn-secondary text-sm">📊 Estoque Excel</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
         <button onClick={() => exportarHistoricoCSV(lancamentos)} className="btn-secondary text-sm">📤 Histórico CSV</button>
       </div>
