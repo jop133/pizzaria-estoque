@@ -9,6 +9,18 @@ import { Badge } from '../components/Badge'
 import { Modal } from '../components/Modal'
 import toast from 'react-hot-toast'
 
+// Observação de uma edição de produto: "Nome · 500 → 750 ml (+250)".
+// Extrai o delta "(±Δ)" (ex.: "+250") e o detalhe (parte após " · ").
+function deltaEdicao(obs) {
+  const m = (obs || '').match(/\(([+-]\d+(?:[.,]\d+)?)\)/)
+  return m ? m[1] : null
+}
+function detalheEdicao(obs) {
+  if (!obs) return null
+  const i = obs.indexOf(' · ')
+  return i >= 0 ? obs.slice(i + 3) : null
+}
+
 export function Historico() {
   const lancamentos = useLancamentos()
   const { organizacaoId } = useAuth()
@@ -188,9 +200,19 @@ export function Historico() {
                       : (l.nomeFicha || l.nomeProduto || '—')}
                     {l.marca && <span className="ml-1 text-xs text-gray-400 font-normal">· {l.marca}</span>}
                   </td>
-                  <td className="px-4 py-3 text-right font-mono">{ehCadastro(l.tipo) ? '—' : l.quantidade}</td>
+                  <td className="px-4 py-3 text-right font-mono">
+                    {(() => {
+                      if (!ehCadastro(l.tipo)) return l.quantidade
+                      const d = l.tipo === 'produto_editado' ? deltaEdicao(l.observacao) : null
+                      return d ? <span className={d.startsWith('-') ? 'text-red-600' : 'text-green-600'}>{d}</span> : '—'
+                    })()}
+                  </td>
                   <td className="px-4 py-3 text-gray-500 text-xs hidden sm:table-cell">{membrosMap[l.user_id] || '—'}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{ehCadastro(l.tipo) ? '—' : (l.observacao || '—')}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">
+                    {l.tipo === 'produto_editado'
+                      ? (detalheEdicao(l.observacao) || '—')
+                      : (ehCadastro(l.tipo) ? '—' : (l.observacao || '—'))}
+                  </td>
                   <td className="px-4 py-3 text-right">
                     <button
                       onClick={() => excluirUm(l)}
