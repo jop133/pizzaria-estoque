@@ -124,6 +124,21 @@ export function Relatorios() {
   const contSobra = contRows.filter(r => r.netD > 0).length
   const contValor = contRows.reduce((s, r) => s + r.rs, 0)
 
+  // Filtro da lista (Tudo / Só faltas / Só sobras) e atalhos de período.
+  const [filtroCont, setFiltroCont] = useState('todos')
+  const contRowsFiltrados = contRows.filter(r =>
+    filtroCont === 'todos' || (filtroCont === 'falta' ? r.netD < 0 : r.netD > 0)
+  )
+  const presetDias = dias => {
+    setContIni(fmtData(new Date(Date.now() - dias * 864e5)))
+    setContFim(fmtData(new Date()))
+  }
+  const presetMesAtual = () => {
+    const h = new Date()
+    setContIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
+    setContFim(fmtData(h))
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -152,49 +167,87 @@ export function Relatorios() {
 
       {/* Relatório de Contagem (período) — abre em tela própria */}
       {mostrarContagem && (
-        <Modal title="📋 Relatório de Contagem" onClose={() => setMostrarContagem(false)}>
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm flex-wrap">
-              <input type="date" value={contIni} max={contFim} onChange={e => setContIni(e.target.value)} className="input w-auto" />
-              <span className="text-gray-400">até</span>
-              <input type="date" value={contFim} min={contIni} onChange={e => setContFim(e.target.value)} className="input w-auto" />
+        <Modal title="📋 Relatório de Contagem" onClose={() => setMostrarContagem(false)} maxWidth="max-w-2xl">
+          <div className="space-y-4">
+            {/* Período: atalhos + intervalo */}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => presetDias(7)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">7 dias</button>
+                <button onClick={() => presetDias(30)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">30 dias</button>
+                <button onClick={presetMesAtual} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">Este mês</button>
+              </div>
+              <div className="flex flex-wrap items-end gap-3 text-sm">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">De</span>
+                  <input type="date" value={contIni} max={contFim} onChange={e => setContIni(e.target.value)} className="input w-auto" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">Até</span>
+                  <input type="date" value={contFim} min={contIni} onChange={e => setContFim(e.target.value)} className="input w-auto" />
+                </label>
+              </div>
             </div>
 
             {contRows.length === 0 ? (
-              <p className="text-sm text-gray-400 text-center py-6">Nenhum ajuste de contagem no período selecionado.</p>
+              <div className="text-center py-10">
+                <p className="text-4xl mb-2">📭</p>
+                <p className="text-sm text-gray-600 font-medium">Nenhum ajuste de contagem no período.</p>
+                <p className="text-xs text-gray-400 mt-1">Faça uma contagem de estoque para ver o relatório aqui.</p>
+              </div>
             ) : (
               <>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
-                  <span className="font-medium text-gray-700">{contRows.length} insumo(s) ajustado(s)</span>
-                  <span className="text-red-600">🔴 {contFalta} falta</span>
-                  <span className="text-green-600">🟢 {contSobra} sobra</span>
-                  <span className={`font-semibold ${contValor < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                    Valor líquido: {formatBRL(contValor)}
-                  </span>
+                {/* Destaque: perda/sobra do período */}
+                <div className={`rounded-xl p-4 ${contValor < 0 ? 'bg-red-50' : 'bg-green-50'}`}>
+                  <p className={`text-xs font-medium uppercase ${contValor < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                    {contValor < 0 ? 'Perda no período' : 'Sobra no período'}
+                  </p>
+                  <p className={`text-3xl font-bold ${contValor < 0 ? 'text-red-700' : 'text-green-700'}`}>{formatBRL(contValor)}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{contRows.length} insumo(s) ajustado(s)</p>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
-                      <tr>
-                        <th className="text-left px-3 py-2">Insumo</th>
-                        <th className="text-right px-3 py-2 whitespace-nowrap">Antes → Depois</th>
-                        <th className="text-right px-3 py-2">Δ</th>
-                        <th className="text-right px-3 py-2">R$</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {contRows.map(r => (
-                        <tr key={r.id} className="border-t border-gray-100">
-                          <td className="px-3 py-2 font-medium text-gray-800">{r.nome}</td>
-                          <td className="px-3 py-2 text-right font-mono text-gray-500 text-xs whitespace-nowrap">{r.antes} → {r.depois} {r.unidade}</td>
-                          <td className={`px-3 py-2 text-right font-mono font-semibold ${r.netD < 0 ? 'text-red-600' : 'text-green-600'}`}>
-                            {r.netD > 0 ? '+' : ''}{r.netD} {r.unidade}
-                          </td>
-                          <td className={`px-3 py-2 text-right font-mono ${r.rs < 0 ? 'text-red-600' : 'text-green-600'}`}>{formatBRL(r.rs)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+
+                {/* Resumo em cards */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl bg-red-50 p-3">
+                    <p className="text-xs text-red-600 font-medium">↓ Faltando</p>
+                    <p className="text-2xl font-bold text-red-700">{contFalta}</p>
+                  </div>
+                  <div className="rounded-xl bg-green-50 p-3">
+                    <p className="text-xs text-green-600 font-medium">↑ Sobrando</p>
+                    <p className="text-2xl font-bold text-green-700">{contSobra}</p>
+                  </div>
+                </div>
+
+                {/* Filtro */}
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1 text-sm">
+                  {[['todos', 'Tudo'], ['falta', 'Só faltas'], ['sobra', 'Só sobras']].map(([v, l]) => (
+                    <button
+                      key={v}
+                      onClick={() => setFiltroCont(v)}
+                      className={`flex-1 py-1.5 rounded-md transition-colors ${filtroCont === v ? 'bg-white shadow-sm text-gray-800 font-medium' : 'text-gray-500'}`}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Lista em cartões (rola; cabeçalho acima fica fixo) */}
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto -mx-1 px-1">
+                  {contRowsFiltrados.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-6">Nenhum item nesse filtro.</p>
+                  ) : contRowsFiltrados.map(r => (
+                    <div key={r.id} className="border border-gray-200 rounded-xl p-3 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-800 truncate">{r.nome}</p>
+                        <p className="text-xs text-gray-400 font-mono">{r.antes} → {r.depois} {r.unidade}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className={`text-sm font-semibold ${r.netD < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                          {r.netD < 0 ? '↓ faltou' : '↑ sobrou'} {Math.abs(r.netD)} {r.unidade}
+                        </p>
+                        <p className={`text-xs font-mono ${r.rs < 0 ? 'text-red-600' : 'text-green-600'}`}>{formatBRL(r.rs)}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </>
             )}
