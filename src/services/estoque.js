@@ -60,7 +60,7 @@ export async function registrarProducao(fichaId, lotes, observacao = '') {
 
 // Registra um evento de cadastro/auditoria no histórico (não mexe no estoque).
 // O nome do item vai na observação para sobreviver mesmo se o item for excluído.
-export async function registrarEvento(tipo, { produtoId = null, fichaId = null, nome = '' } = {}) {
+export async function registrarEvento(tipo, { produtoId = null, fichaId = null, nome = '', detalhe = '' } = {}) {
   const orgId = session.organizacaoId
   if (!orgId) return
   const { error } = await supabase.from('lancamentos').insert({
@@ -69,7 +69,9 @@ export async function registrarEvento(tipo, { produtoId = null, fichaId = null, 
     produto_id: produtoId,
     ficha_id: fichaId,
     quantidade: 0,
-    observacao: nome,
+    // Nome fica sempre na frente (sobrevive à exclusão); o detalhe (ex.: a
+    // alteração de quantidade numa edição) vem depois de " · ".
+    observacao: detalhe ? `${nome} · ${detalhe}` : nome,
     user_id: session.userId,
   })
   // Auditoria é best-effort: uma falha aqui não deve derrubar a operação

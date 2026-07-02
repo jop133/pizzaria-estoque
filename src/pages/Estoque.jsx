@@ -103,7 +103,16 @@ export function Estoque() {
     } else {
       const { error } = await supabase.from('produtos').update(data).eq('id', modal.id)
       if (error) return toast.error(error.message)
-      await registrarEvento('produto_editado', { produtoId: modal.id, nome: data.nome })
+      // Registra a alteração exata de quantidade no histórico (só quando a
+      // unidade não mudou; com troca de unidade os números não são comparáveis).
+      let detalhe = ''
+      const antes = Math.round((modal.quantidade || 0) * 1000) / 1000
+      const depois = Math.round(data.quantidade * 1000) / 1000
+      const delta = Math.round((depois - antes) * 1000) / 1000
+      if (delta !== 0 && modal.unidade === form.unidade) {
+        detalhe = `${antes} → ${depois} ${form.unidade} (${delta > 0 ? '+' : ''}${delta})`
+      }
+      await registrarEvento('produto_editado', { produtoId: modal.id, nome: data.nome, detalhe })
 
       // Se a unidade mudou (entre compatíveis), converte as quantidades usadas
       // deste produto nas fichas técnicas, para manterem o valor real.
