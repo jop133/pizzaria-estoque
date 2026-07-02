@@ -1,14 +1,12 @@
-import { useLancamentos, useProdutos } from '../hooks/useEstoque'
-import { formatBRL } from '../lib/custos'
+import { useLancamentos, useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
+import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
 import { exportarEstoqueCSV, exportarEstoquePDF, exportarHistoricoCSV } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
+  PieChart, Pie, Cell, LabelList
 } from 'recharts'
 import { useState } from 'react'
 import { Modal } from '../components/Modal'
-
-const CORES = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899']
 
 // Cor fixa por categoria (consistente entre sessões; paleta harmônica).
 const COR_CATEGORIA = {
@@ -38,8 +36,12 @@ const NORMALIZAR_CAT = {
 export function Relatorios() {
   const lancamentos = useLancamentos()
   const produtos = useProdutos()
+  const fichas = useFichas()
+  const ingredientes = useTodosIngredientes()
   const [periodo, setPeriodo] = useState('7')
   const [mostrarContagem, setMostrarContagem] = useState(false)
+  const [periodoConsumo, setPeriodoConsumo] = useState('7')
+  const [metricaConsumo, setMetricaConsumo] = useState('qtd')
 
   const dias = parseInt(periodo)
   const filtrados = lancamentos.filter(l => {
@@ -50,16 +52,32 @@ export function Relatorios() {
   const saidas = filtrados.filter(l => l.tipo !== 'entrada')
   const entradas = filtrados.filter(l => l.tipo === 'entrada')
 
-  // Consumo agrupado por item
+  // Top Consumo: só saídas reais (venda por ficha + saída manual), no período
+  // próprio do gráfico. Ignora ajuste/produção/cadastro. Métrica = quantidade
+  // OU valor em R$ (custo consumido: produto = custo unitário; prato = Σ insumos).
+  const custoUnit = criarCalculadoraDeCusto(produtos, fichas, ingredientes)
+  const ingsPorFicha = {}
+  for (const ing of ingredientes) (ingsPorFicha[ing.ficha_id] || (ingsPorFicha[ing.ficha_id] = [])).push(ing)
+  const custoDaFicha = fichaId => (ingsPorFicha[fichaId] || []).reduce((s, ing) => s + (ing.quantidade || 0) * custoUnit(ing.produto_id), 0)
+  const diasConsumo = parseInt(periodoConsumo)
   const consumoMap = {}
-  saidas.forEach(l => {
-    const key = l.nomeFicha || l.nomeProduto || 'Sem nome'
-    consumoMap[key] = (consumoMap[key] || 0) + l.quantidade
-  })
-  const consumoData = Object.entries(consumoMap)
-    .sort((a, b) => b[1] - a[1])
+  for (const l of lancamentos) {
+    if (l.tipo !== 'saida_ficha' && l.tipo !== 'saida_manual') continue
+    if ((new Date() - new Date(l.data)) / 864e5 > diasConsumo) continue
+    const ehVenda = l.tipo === 'saida_ficha'
+    const nome = (ehVenda ? l.nomeFicha : l.nomeProduto) || 'Sem nome'
+    const key = (ehVenda ? 'f:' : 'p:') + nome
+    const qtd = l.quantidade || 0
+    const valor = ehVenda ? qtd * custoDaFicha(l.ficha_id) : qtd * custoUnit(l.produto_id)
+    if (!consumoMap[key]) consumoMap[key] = { nome, rotulo: (ehVenda ? '🍕 ' : '📦 ') + nome, qtd: 0, valor: 0 }
+    consumoMap[key].qtd += qtd
+    consumoMap[key].valor += valor
+  }
+  const consumoData = Object.values(consumoMap)
+    .map(c => ({ ...c, value: metricaConsumo === 'valor' ? Math.round(c.valor * 100) / 100 : Math.round(c.qtd * 1000) / 1000 }))
+    .filter(c => c.value > 0)
+    .sort((a, b) => b.value - a.value)
     .slice(0, 10)
-    .map(([name, value]) => ({ name, value }))
 
   // Estoque por categoria (quantidade). Unifica categorias antigas nas novas
   // e agrupa fatias minúsculas (<1% do total) numa fatia "Outros".
@@ -255,21 +273,57 @@ export function Relatorios() {
         </Modal>
       )}
 
-      {consumoData.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h2 className="font-semibold text-gray-700 mb-4">Top Consumo no Período</h2>
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={consumoData} margin={{ top: 0, right: 10, left: -20, bottom: 70 }}>
-              <XAxis dataKey="name" angle={-40} textAnchor="end" tick={{ fontSize: 10 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {consumoData.map((_, i) => <Cell key={i} fill={CORES[i % CORES.length]} />)}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+          <h2 className="font-semibold text-gray-700">Top Consumo</h2>
+          <div className="flex items-center gap-2">
+            <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 text-xs">
+              {[['qtd', 'Qtd'], ['valor', 'R$']].map(([v, l]) => (
+                <button
+                  key={v}
+                  onClick={() => setMetricaConsumo(v)}
+                  className={`px-2.5 py-1 rounded-md transition-colors ${metricaConsumo === v ? 'bg-white shadow-sm text-gray-800 font-medium' : 'text-gray-500'}`}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <select value={periodoConsumo} onChange={e => setPeriodoConsumo(e.target.value)} className="input w-auto text-sm py-1">
+              <option value="1">Hoje</option>
+              <option value="7">7 dias</option>
+              <option value="30">30 dias</option>
+              <option value="90">90 dias</option>
+            </select>
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 mb-4">Top 10 saídas do período (🍕 vendas + 📦 saídas manuais)</p>
+        {consumoData.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-10">Nenhuma saída no período selecionado.</p>
+        ) : (
+          <ResponsiveContainer width="100%" height={Math.max(consumoData.length * 40 + 10, 120)}>
+            <BarChart data={consumoData} layout="vertical" margin={{ top: 0, right: 70, left: 10, bottom: 0 }}>
+              <XAxis type="number" tick={{ fontSize: 11 }} />
+              <YAxis
+                type="category"
+                dataKey="rotulo"
+                width={130}
+                tick={{ fontSize: 11 }}
+                tickFormatter={t => t.length > 20 ? t.slice(0, 19) + '…' : t}
+              />
+              <Tooltip formatter={v => metricaConsumo === 'valor' ? formatBRL(v) : v} />
+              <Bar dataKey="value" fill="#b91c1c" radius={[0, 4, 4, 0]}>
+                <LabelList
+                  dataKey="value"
+                  position="right"
+                  fill="#6b7280"
+                  fontSize={11}
+                  formatter={v => metricaConsumo === 'valor' ? formatBRL(v) : v}
+                />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-        </div>
-      )}
+        )}
+      </div>
 
       {catData.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-4">
