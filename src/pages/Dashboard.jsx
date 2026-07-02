@@ -1,9 +1,7 @@
 import { useProdutos, useLancamentos, useProdutosAbaixoMinimo, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
-import { TIPOS_MOVIMENTACAO } from '../lib/lancamentos'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell
-} from 'recharts'
+import { useState } from 'react'
+import { Search } from 'lucide-react'
 
 export function Dashboard() {
   const produtos = useProdutos()
@@ -11,6 +9,7 @@ export function Dashboard() {
   const abaixoMinimo = useProdutosAbaixoMinimo()
   const fichas = useFichas()
   const ingredientes = useTodosIngredientes()
+  const [buscaValor, setBuscaValor] = useState('')
 
   const totalProdutos = produtos.length
   const totalItens = produtos.reduce((s, p) => s + (p.quantidade || 0), 0)
@@ -38,18 +37,6 @@ export function Dashboard() {
     return (agora - d) / (1000 * 60 * 60 * 24) <= 7
   })
 
-  const consumoPorProduto = {}
-  ultimos7dias
-    .filter(l => TIPOS_MOVIMENTACAO.includes(l.tipo) && l.tipo !== 'entrada')
-    .forEach(l => {
-      const key = l.nomeProduto || l.nomeFicha || 'Sem nome'
-      consumoPorProduto[key] = (consumoPorProduto[key] || 0) + l.quantidade
-    })
-  const chartData = Object.entries(consumoPorProduto)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 8)
-    .map(([name, value]) => ({ name, value }))
-
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-gray-800">Dashboard</h1>
@@ -60,42 +47,6 @@ export function Dashboard() {
         <Card label="Abaixo do Mínimo" value={abaixoMinimo.length} color={abaixoMinimo.length > 0 ? 'red' : 'green'} />
         <Card label="Lançamentos (7d)" value={ultimos7dias.length} color="orange" />
       </div>
-
-      {abaixoMinimo.length > 0 && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <h2 className="text-red-700 font-semibold mb-3 flex items-center gap-2">
-            <span>⚠️</span> Estoque Baixo — Atenção
-          </h2>
-          <div className="flex flex-wrap gap-2">
-            {abaixoMinimo.map(p => (
-              <div key={p.id} className="bg-white border border-red-200 rounded-lg px-3 py-2">
-                <p className="font-medium text-gray-800 text-sm">{p.nome}</p>
-                <p className="text-xs text-red-600">
-                  {p.quantidade} {p.unidade} / mín. {p.estoque_minimo} {p.unidade}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {chartData.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 p-4">
-          <h2 className="font-semibold text-gray-700 mb-4">Top Consumo (últimos 7 dias)</h2>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={chartData} margin={{ top: 0, right: 10, left: -20, bottom: 60 }}>
-              <XAxis dataKey="name" angle={-35} textAnchor="end" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {chartData.map((_, i) => (
-                  <Cell key={i} fill={`hsl(${200 + i * 20}, 70%, 50%)`} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       <div className="bg-white rounded-xl border border-gray-200 p-4">
         <h2 className="font-semibold text-gray-700 mb-1">💰 Valor em estoque</h2>
@@ -116,13 +67,28 @@ export function Dashboard() {
             </div>
 
             <p className="text-xs font-medium text-gray-500 uppercase mb-1">Por produto</p>
+            <div className="relative mb-2">
+              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                placeholder="Buscar produto..."
+                value={buscaValor}
+                onChange={e => setBuscaValor(e.target.value)}
+                className="input pl-9"
+              />
+            </div>
             <div className="space-y-1 max-h-72 overflow-y-auto">
-              {valorProdutos.map(x => (
-                <div key={x.id} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
-                  <span className="text-gray-600 truncate pr-2">{x.nome}</span>
-                  <span className="font-mono text-gray-800 shrink-0">{formatBRL(x.valor)}</span>
-                </div>
-              ))}
+              {(() => {
+                const lista = valorProdutos.filter(x => x.nome.toLowerCase().includes(buscaValor.toLowerCase()))
+                if (lista.length === 0) {
+                  return <p className="text-sm text-gray-400 py-4 text-center">Nenhum produto encontrado.</p>
+                }
+                return lista.map(x => (
+                  <div key={x.id} className="flex items-center justify-between text-sm border-b border-gray-100 py-1.5 last:border-0">
+                    <span className="text-gray-600 truncate pr-2">{x.nome}</span>
+                    <span className="font-mono text-gray-800 shrink-0">{formatBRL(x.valor)}</span>
+                  </div>
+                ))
+              })()}
             </div>
           </>
         )}
