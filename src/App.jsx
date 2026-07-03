@@ -25,7 +25,7 @@ const ABAS = {
   estoque: { label: 'Estoque', Icon: Package },
   compras: { label: 'Lista de Compras', Icon: ShoppingCart },
   lancamentos: { label: 'Lançar Manual', Icon: PencilLine },
-  foto: { label: 'Lançar com IA', Icon: Camera },
+  foto: { label: 'Lançar com Foto', Icon: Camera },
   historico: { label: 'Histórico', Icon: History },
   fichas: { label: 'Fichas Técnicas', Icon: ClipboardList },
   contagem: { label: 'Contagem', Icon: ClipboardCheck },

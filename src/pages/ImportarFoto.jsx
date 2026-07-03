@@ -741,7 +741,7 @@ export function ImportarFoto() {
       {/* ----------------------------- TELA INICIAL ----------------------------- */}
       {!emRevisao && (
         <>
-          <h1 className="text-2xl font-bold text-gray-800">Lançar com IA</h1>
+          <h1 className="text-2xl font-bold text-gray-800">Lançar com Foto</h1>
 
           {editandoChave ? (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
