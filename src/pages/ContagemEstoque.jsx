@@ -117,7 +117,7 @@ export function ContagemEstoque() {
     const selecionados = Array.from(e.target.files)
     e.target.value = ''
     if (!selecionados.length) return
-    if (!apiKey) return toast.error('Configure a chave da IA na aba "Foto IA" primeiro')
+    if (!apiKey) return toast.error('Configure a chave da IA na aba "Lançar com Foto" primeiro')
 
     setFotoFase('lendo')
     const t = toast.loading('Lendo foto(s)...')

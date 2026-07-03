@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useLancamentos } from '../hooks/useEstoque'
 import { useAuth } from '../contexts/AuthContext'
-import { exportarHistoricoCSV } from '../services/importExport'
+import { exportarHistoricoXLSX } from '../services/importExport'
 import { excluirLancamento } from '../services/estoque'
 import { TIPO_LABEL, TIPO_COR, TIPOS_MOVIMENTACAO, TIPOS_CADASTRO, ehCadastro } from '../lib/lancamentos'
 import { supabase } from '../lib/supabase'
@@ -61,6 +61,28 @@ export function Historico() {
     return okTipo && okBusca && okPeriodo
   })
 
+  const baixarHistoricoExcel = async () => {
+    if (filtrados.length === 0) return toast.error('Nada para exportar no filtro atual')
+    const linhas = filtrados.map(l => ({
+      data: new Date(l.data),
+      tipo: TIPO_LABEL[l.tipo] || l.tipo,
+      grupo: ehCadastro(l.tipo) ? 'Cadastro' : 'Movimentação',
+      item: ehCadastro(l.tipo)
+        ? (l.nomeProduto || l.nomeFicha || l.observacao || '—')
+        : (l.nomeFicha || l.nomeProduto || '—'),
+      qtd: ehCadastro(l.tipo) ? null : (l.quantidade ?? 0),
+      por: membrosMap[l.user_id] || '—',
+      obs: l.observacao || '',
+    }))
+    const t = toast.loading('Gerando Excel...')
+    try {
+      await exportarHistoricoXLSX(linhas)
+      toast.success('Excel gerado!', { id: t })
+    } catch {
+      toast.error('Falha ao gerar o Excel', { id: t })
+    }
+  }
+
   const todosSelecionados = filtrados.length > 0 && filtrados.every(l => selecionados.has(l.id))
 
   function toggleSelecionado(id) {
@@ -110,7 +132,7 @@ export function Historico() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-2xl font-bold text-gray-800">Histórico</h1>
-        <button onClick={() => exportarHistoricoCSV(filtrados)} className="btn-secondary text-sm">📤 Exportar CSV</button>
+        <button onClick={baixarHistoricoExcel} className="btn-secondary text-sm">📊 Histórico Excel</button>
       </div>
 
       <div className="flex gap-2 flex-wrap">

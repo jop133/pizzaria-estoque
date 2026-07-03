@@ -167,7 +167,7 @@ export function FichasTecnicas() {
 
   async function processarFoto() {
     if (!fotoAnalise) return
-    if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Foto IA primeiro')
+    if (!apiKey) return toast.error('Configure a chave da API na aba 📷 Lançar com Foto primeiro')
     setAnalisando(true)
     try {
       const { base64, mimeType } = await prepararImagem(fotoAnalise.file)
