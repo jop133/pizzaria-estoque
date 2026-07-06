@@ -635,6 +635,7 @@ export function Estoque() {
         {filtrados.length === 0 ? (
           <p className="text-gray-400 text-sm p-6 text-center">Nenhum produto encontrado.</p>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
               <tr>
@@ -642,9 +643,9 @@ export function Estoque() {
                   <input type="checkbox" checked={todosSelecionados} onChange={toggleTodos} className="w-4 h-4 accent-red-600" />
                 </th>
                 <th className="text-left px-4 py-3">Produto</th>
-                <th className="text-left px-4 py-3 hidden sm:table-cell">Categoria</th>
+                <th className="text-left px-4 py-3">Categoria</th>
                 <th className="text-right px-4 py-3">Qtd</th>
-                <th className="text-right px-4 py-3 hidden md:table-cell">Mínimo</th>
+                <th className="text-right px-4 py-3">Mínimo</th>
                 <th className="text-center px-4 py-3">Status</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -658,11 +659,11 @@ export function Estoque() {
                       <input type="checkbox" checked={selecionados.has(p.id)} onChange={() => toggleSelecionado(p.id)} className="w-4 h-4 accent-red-600" />
                     </td>
                     <td className="px-4 py-3 font-medium text-gray-800">{p.nome}</td>
-                    <td className="px-4 py-3 text-gray-500 hidden sm:table-cell">{p.categoria}</td>
+                    <td className="px-4 py-3 text-gray-500">{p.categoria}</td>
                     <td className="px-4 py-3 text-right font-mono">
                       {p.quantidade} <span className="text-gray-400 text-xs">{p.unidade}</span>
                     </td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-400 hidden md:table-cell">
+                    <td className="px-4 py-3 text-right font-mono text-gray-400">
                       {p.estoque_minimo} {p.unidade}
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -676,6 +677,7 @@ export function Estoque() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 

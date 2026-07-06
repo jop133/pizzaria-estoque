@@ -186,6 +186,7 @@ export function Historico() {
         {filtrados.length === 0 ? (
           <p className="text-gray-400 text-sm p-6 text-center">Nenhum lançamento encontrado.</p>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-gray-500 text-xs uppercase">
               <tr>
@@ -196,8 +197,8 @@ export function Historico() {
                 <th className="text-left px-4 py-3">Tipo</th>
                 <th className="text-left px-4 py-3">Item</th>
                 <th className="text-right px-4 py-3">Qtd</th>
-                <th className="text-left px-4 py-3 hidden sm:table-cell">Por</th>
-                <th className="text-left px-4 py-3 hidden md:table-cell">Obs.</th>
+                <th className="text-left px-4 py-3">Por</th>
+                <th className="text-left px-4 py-3">Obs.</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -229,8 +230,8 @@ export function Historico() {
                       return d ? <span className={d.startsWith('-') ? 'text-red-600' : 'text-green-600'}>{d}</span> : '—'
                     })()}
                   </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs hidden sm:table-cell">{membrosMap[l.user_id] || '—'}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">
+                  <td className="px-4 py-3 text-gray-500 text-xs">{membrosMap[l.user_id] || '—'}</td>
+                  <td className="px-4 py-3 text-gray-400 text-xs">
                     {l.tipo === 'produto_editado'
                       ? (detalheEdicao(l.observacao) || '—')
                       : (ehCadastro(l.tipo) ? '—' : (l.observacao || '—'))}
@@ -246,6 +247,7 @@ export function Historico() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
