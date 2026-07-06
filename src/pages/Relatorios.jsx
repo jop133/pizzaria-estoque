@@ -1,6 +1,6 @@
 import { useLancamentos, useProdutos, useFichas, useTodosIngredientes } from '../hooks/useEstoque'
 import { criarCalculadoraDeCusto, formatBRL } from '../lib/custos'
-import { exportarEstoqueXLSX, exportarVendasXLSX, exportarEstoquePDF } from '../services/importExport'
+import { exportarEstoqueXLSX, exportarVendasXLSX, exportarComprasXLSX, exportarEstoquePDF } from '../services/importExport'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, LabelList
@@ -258,7 +258,7 @@ export function Relatorios() {
       const key = l.produto_id ?? nome
       const qtd = l.quantidade || 0
       const valor = qtd * custoUnit(l.produto_id)
-      if (!map[key]) map[key] = { key, nome, unidade: prodMap[l.produto_id]?.unidade || '', qtd: 0, valor: 0 }
+      if (!map[key]) map[key] = { key, nome, categoria: prodMap[l.produto_id]?.categoria || 'Outros', unidade: prodMap[l.produto_id]?.unidade || '', qtd: 0, valor: 0 }
       map[key].qtd += qtd
       map[key].valor += valor
     }
@@ -286,6 +286,32 @@ export function Relatorios() {
     setCompraFim(fmtData(h))
   }
 
+  // Exportar Compras em Excel — período escolhido num modal próprio.
+  const [mostrarComprasExcel, setMostrarComprasExcel] = useState(false)
+  const [xlsCIni, setXlsCIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
+  const [xlsCFim, setXlsCFim] = useState(() => fmtData(new Date()))
+  const presetXlsCDias = dias => {
+    setXlsCIni(fmtData(new Date(Date.now() - dias * 864e5)))
+    setXlsCFim(fmtData(new Date()))
+  }
+  const presetXlsCMes = () => {
+    const h = new Date()
+    setXlsCIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
+    setXlsCFim(fmtData(h))
+  }
+  const baixarComprasExcel = async () => {
+    const rows = calcularCompras(xlsCIni, xlsCFim)
+    if (rows.length === 0) return toast.error('Nenhuma compra no período selecionado')
+    const t = toast.loading('Gerando Excel...')
+    try {
+      await exportarComprasXLSX(rows, { ini: xlsCIni, fim: xlsCFim })
+      toast.success('Excel gerado!', { id: t })
+      setMostrarComprasExcel(false)
+    } catch {
+      toast.error('Falha ao gerar o Excel', { id: t })
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -311,6 +337,7 @@ export function Relatorios() {
         <button onClick={() => setMostrarCompras(true)} className="btn-secondary text-sm">🛒 Relatório de Compras</button>
         <button onClick={baixarEstoqueExcel} className="btn-secondary text-sm">📊 Estoque Excel</button>
         <button onClick={() => setMostrarVendasExcel(true)} className="btn-secondary text-sm">📊 Vendas Excel</button>
+        <button onClick={() => setMostrarComprasExcel(true)} className="btn-secondary text-sm">🛒 Compras Excel</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
       </div>
 
@@ -335,6 +362,31 @@ export function Relatorios() {
               </label>
             </div>
             <button onClick={baixarVendasExcel} className="btn-primary w-full">📥 Baixar Excel</button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Compras Excel — escolha do período antes de baixar */}
+      {mostrarComprasExcel && (
+        <Modal title="🛒 Compras Excel" onClose={() => setMostrarComprasExcel(false)}>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">Escolha o período das compras que deseja exportar:</p>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => presetXlsCDias(7)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">7 dias</button>
+              <button onClick={() => presetXlsCDias(30)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">30 dias</button>
+              <button onClick={presetXlsCMes} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">Este mês</button>
+            </div>
+            <div className="flex flex-wrap items-end gap-3 text-sm">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">De</span>
+                <input type="date" value={xlsCIni} max={xlsCFim} onChange={e => setXlsCIni(e.target.value)} className="input w-auto" />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-gray-500">Até</span>
+                <input type="date" value={xlsCFim} min={xlsCIni} onChange={e => setXlsCFim(e.target.value)} className="input w-auto" />
+              </label>
+            </div>
+            <button onClick={baixarComprasExcel} className="btn-primary w-full">📥 Baixar Excel</button>
           </div>
         </Modal>
       )}

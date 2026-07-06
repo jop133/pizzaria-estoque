@@ -300,6 +300,130 @@ export async function exportarVendasXLSX(rows, { ini, fim }) {
   download(buf, `vendas-pier-${ini}_a_${fim}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 }
 
+// Exporta as compras (entradas) de um período como Excel, no mesmo estilo:
+// aba "Compras" (detalhe por produto) + "Resumo" (por categoria).
+// `rows` = [{ nome, categoria, unidade, qtd, valor }] (valor = custo × qtd).
+export async function exportarComprasXLSX(rows, { ini, fim }) {
+  const mod = await import('exceljs')
+  const ExcelJS = mod.default ?? mod
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'Pier Pizza & Cantina'
+  wb.created = new Date()
+  const dataStr = new Date().toLocaleDateString('pt-BR')
+  const periodoStr = `${dataBR(ini)} a ${dataBR(fim)}`
+  const itens = rows.slice().sort((a, b) => b.valor - a.valor)
+
+  const wsR = wb.addWorksheet('Resumo', { views: [{ state: 'frozen', ySplit: 4 }] })
+
+  // Aba Compras (detalhe).
+  const headers = ['Produto', 'Categoria', 'Qtd comprada', 'Und', 'Custo un. (R$)', 'Custo total (R$)']
+  const larguras = [34, 22, 14, 10, 15, 16]
+  const nc = headers.length
+  const ws = wb.addWorksheet('Compras', { views: [{ state: 'frozen', ySplit: 4 }] })
+  ws.columns = larguras.map(w => ({ width: w }))
+  ws.mergeCells(1, 1, 1, nc)
+  ws.getCell('A1').value = `Pier Pizza & Cantina — Compras — ${periodoStr}`
+  ws.getCell('A1').font = { bold: true, size: 14, color: { argb: C_VINHO } }
+  ws.getRow(1).height = 22
+  ws.mergeCells(2, 1, 2, nc)
+  ws.getCell('A2').value = `Gerado em ${dataStr} · R$ = custo (custo atual × qtd, não é o valor da nota)`
+  ws.getCell('A2').font = { size: 9, italic: true, color: { argb: C_CINZA } }
+  const hr = ws.getRow(4)
+  headers.forEach((h, i) => {
+    const c = hr.getCell(i + 1)
+    c.value = h
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO } }
+    c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'center' }
+    c.border = bordaFina()
+  })
+  hr.height = 20
+  let totCusto = 0, totQtd = 0
+  itens.forEach((it, idx) => {
+    const custoUn = it.qtd ? it.valor / it.qtd : 0
+    totCusto += it.valor
+    totQtd += it.qtd
+    const vals = [it.nome, it.categoria || 'Outros', it.qtd, it.unidade || '', r2(custoUn), r2(it.valor)]
+    const r = ws.getRow(5 + idx)
+    vals.forEach((v, ci) => {
+      const c = r.getCell(ci + 1)
+      c.value = v
+      c.border = bordaFina()
+      c.alignment = { horizontal: ci === 0 || ci === 1 ? 'left' : 'center' }
+      if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_ZEBRA } }
+    })
+    r.getCell(5).numFmt = FMT_RS
+    r.getCell(6).numFmt = FMT_RS
+  })
+  const sr = ws.getRow(5 + itens.length)
+  sr.getCell(1).value = `TOTAL — ${itens.length} item(ns) · ${r3(totQtd)} comprados`
+  sr.getCell(nc).value = r2(totCusto)
+  sr.getCell(nc).numFmt = FMT_RS
+  for (let ci = 1; ci <= nc; ci++) {
+    sr.getCell(ci).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO_CLARO } }
+    sr.getCell(ci).border = bordaFina()
+    sr.getCell(ci).font = { bold: true }
+  }
+  sr.getCell(1).alignment = { horizontal: 'left' }
+  sr.getCell(nc).alignment = { horizontal: 'center' }
+
+  // Aba Resumo (por categoria).
+  const porCat = {}
+  for (const it of itens) {
+    const c = it.categoria || 'Outros'
+    if (!porCat[c]) porCat[c] = { n: 0, qtd: 0, custo: 0 }
+    porCat[c].n += 1
+    porCat[c].qtd += it.qtd
+    porCat[c].custo += it.valor
+  }
+  const catRows = Object.entries(porCat).map(([cat, t]) => ({ cat, ...t })).sort((a, b) => b.custo - a.custo)
+  wsR.columns = [{ width: 28 }, { width: 14 }, { width: 16 }, { width: 18 }]
+  wsR.mergeCells('A1:D1')
+  wsR.getCell('A1').value = `Pier Pizza & Cantina — Compras — ${periodoStr}`
+  wsR.getCell('A1').font = { bold: true, size: 14, color: { argb: C_VINHO } }
+  wsR.getRow(1).height = 22
+  wsR.mergeCells('A2:D2')
+  wsR.getCell('A2').value = `Gerado em ${dataStr} · R$ = custo dos insumos (não é o valor da nota)`
+  wsR.getCell('A2').font = { size: 9, italic: true, color: { argb: C_CINZA } }
+  const rHead = wsR.getRow(4)
+  ;['Categoria', 'Nº de itens', 'Qtd comprada', 'Custo total (R$)'].forEach((h, i) => {
+    const c = rHead.getCell(i + 1)
+    c.value = h
+    c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO } }
+    c.alignment = { horizontal: i === 0 ? 'left' : 'center' }
+    c.border = bordaFina()
+  })
+  rHead.height = 20
+  catRows.forEach((x, idx) => {
+    const r = wsR.getRow(5 + idx)
+    ;[x.cat, x.n, r3(x.qtd), r2(x.custo)].forEach((v, ci) => {
+      const c = r.getCell(ci + 1)
+      c.value = v
+      c.border = bordaFina()
+      c.alignment = { horizontal: ci === 0 ? 'left' : 'center' }
+      if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_ZEBRA } }
+    })
+    r.getCell(4).numFmt = FMT_RS
+  })
+  const rTot = wsR.getRow(5 + catRows.length)
+  rTot.getCell(1).value = 'TOTAL GERAL'
+  rTot.getCell(2).value = itens.length
+  rTot.getCell(3).value = r3(totQtd)
+  rTot.getCell(4).value = r2(totCusto)
+  rTot.getCell(4).numFmt = FMT_RS
+  for (let ci = 1; ci <= 4; ci++) {
+    rTot.getCell(ci).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO_CLARO } }
+    rTot.getCell(ci).border = bordaFina()
+    rTot.getCell(ci).font = { bold: true }
+  }
+  rTot.getCell(1).alignment = { horizontal: 'left' }
+  ;[2, 3, 4].forEach(ci => rTot.getCell(ci).alignment = { horizontal: 'center' })
+
+  const buf = await wb.xlsx.writeBuffer()
+  download(buf, `compras-pier-${ini}_a_${fim}.xlsx`, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+}
+
 export function exportarEstoquePDF(produtos) {
   const doc = new jsPDF()
   doc.setFontSize(16)
