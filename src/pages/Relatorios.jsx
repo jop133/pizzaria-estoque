@@ -243,6 +243,49 @@ export function Relatorios() {
     }
   }
 
+  // --- Relatório de Compras (entradas/reposição num período) -------------------
+  // Compra = lançamento tipo 'entrada'. Consolida por produto; mostra quantidade
+  // e o custo (custo atual × qtd — aproximação do gasto, sem preço pago histórico).
+  const calcularCompras = (iniStr, fimStr) => {
+    const ini = new Date(iniStr + 'T00:00:00')
+    const fim = new Date(fimStr + 'T23:59:59.999')
+    const map = {}
+    for (const l of lancamentos) {
+      if (l.tipo !== 'entrada') continue
+      const d = new Date(l.data)
+      if (d < ini || d > fim) continue
+      const nome = l.nomeProduto || 'Sem nome'
+      const key = l.produto_id ?? nome
+      const qtd = l.quantidade || 0
+      const valor = qtd * custoUnit(l.produto_id)
+      if (!map[key]) map[key] = { key, nome, unidade: prodMap[l.produto_id]?.unidade || '', qtd: 0, valor: 0 }
+      map[key].qtd += qtd
+      map[key].valor += valor
+    }
+    return Object.values(map)
+      .map(v => ({ ...v, qtd: round3(v.qtd), valor: Math.round(v.valor * 100) / 100 }))
+      .filter(v => v.qtd > 0)
+  }
+  const [mostrarCompras, setMostrarCompras] = useState(false)
+  const [compraIni, setCompraIni] = useState(() => fmtData(new Date(Date.now() - 7 * 864e5)))
+  const [compraFim, setCompraFim] = useState(() => fmtData(new Date()))
+  const [buscaCompra, setBuscaCompra] = useState('')
+  const [metricaCompra, setMetricaCompra] = useState('qtd') // qtd | valor
+  const compraRows = calcularCompras(compraIni, compraFim)
+    .sort((a, b) => metricaCompra === 'valor' ? b.valor - a.valor : b.qtd - a.qtd)
+  const compraTotalUnid = round3(compraRows.reduce((s, v) => s + v.qtd, 0))
+  const compraTotalValor = Math.round(compraRows.reduce((s, v) => s + v.valor, 0) * 100) / 100
+  const compraRowsFiltrados = compraRows.filter(v => !buscaCompra || v.nome.toLowerCase().includes(buscaCompra.toLowerCase()))
+  const presetCompraDias = dias => {
+    setCompraIni(fmtData(new Date(Date.now() - dias * 864e5)))
+    setCompraFim(fmtData(new Date()))
+  }
+  const presetCompraMes = () => {
+    const h = new Date()
+    setCompraIni(fmtData(new Date(h.getFullYear(), h.getMonth(), 1)))
+    setCompraFim(fmtData(h))
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -265,6 +308,7 @@ export function Relatorios() {
       <div className="flex gap-2 flex-wrap">
         <button onClick={() => setMostrarContagem(true)} className="btn-secondary text-sm">📋 Relatório de Contagem</button>
         <button onClick={() => setMostrarVendas(true)} className="btn-secondary text-sm">🧾 Relatório de Vendas</button>
+        <button onClick={() => setMostrarCompras(true)} className="btn-secondary text-sm">🛒 Relatório de Compras</button>
         <button onClick={baixarEstoqueExcel} className="btn-secondary text-sm">📊 Estoque Excel</button>
         <button onClick={() => setMostrarVendasExcel(true)} className="btn-secondary text-sm">📊 Vendas Excel</button>
         <button onClick={() => exportarEstoquePDF(produtos)} className="btn-secondary text-sm">📄 Estoque PDF</button>
@@ -473,6 +517,94 @@ export function Relatorios() {
                         </p>
                         <p className="text-xs font-mono text-gray-400">
                           {metricaVenda === 'valor' ? `${v.qtd}${v.unidade ? ' ' + v.unidade : ''} vendidos` : formatBRL(v.valor)}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {/* Relatório de Compras (período) — abre em tela própria */}
+      {mostrarCompras && (
+        <Modal title="🛒 Relatório de Compras" onClose={() => setMostrarCompras(false)} maxWidth="max-w-2xl">
+          <div className="space-y-4">
+            {/* Período: atalhos + intervalo */}
+            <div className="space-y-2">
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => presetCompraDias(7)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">7 dias</button>
+                <button onClick={() => presetCompraDias(30)} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">30 dias</button>
+                <button onClick={presetCompraMes} className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-600 hover:bg-gray-50">Este mês</button>
+              </div>
+              <div className="flex flex-wrap items-end gap-3 text-sm">
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">De</span>
+                  <input type="date" value={compraIni} max={compraFim} onChange={e => setCompraIni(e.target.value)} className="input w-auto" />
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-xs text-gray-500">Até</span>
+                  <input type="date" value={compraFim} min={compraIni} onChange={e => setCompraFim(e.target.value)} className="input w-auto" />
+                </label>
+              </div>
+            </div>
+
+            {compraRows.length === 0 ? (
+              <div className="text-center py-10">
+                <p className="text-4xl mb-2">🛒</p>
+                <p className="text-sm text-gray-600 font-medium">Nenhuma compra no período.</p>
+                <p className="text-xs text-gray-400 mt-1">Lance entradas (reposição/compra) para ver o relatório aqui.</p>
+              </div>
+            ) : (
+              <>
+                {/* Destaque: total comprado */}
+                <div className="rounded-xl p-4 bg-green-50">
+                  <p className="text-xs font-medium uppercase text-green-700">Itens comprados no período</p>
+                  <p className="text-3xl font-bold text-green-800">{compraTotalUnid}</p>
+                  <p className="text-xs text-gray-500 mt-0.5">{compraRows.length} item(ns) diferente(s) · custo total {formatBRL(compraTotalValor)}</p>
+                </div>
+
+                {/* Métrica */}
+                <div className="flex gap-1 bg-gray-100 rounded-lg p-1 text-sm">
+                  {[['qtd', 'Quantidade'], ['valor', 'Custo R$']].map(([v, l]) => (
+                    <button
+                      key={v}
+                      onClick={() => setMetricaCompra(v)}
+                      className={`flex-1 py-1.5 rounded-md transition-colors ${metricaCompra === v ? 'bg-white shadow-sm text-gray-800 font-medium' : 'text-gray-500'}`}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Busca por nome */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    placeholder="Buscar produto..."
+                    value={buscaCompra}
+                    onChange={e => setBuscaCompra(e.target.value)}
+                    className="input pl-9"
+                  />
+                </div>
+
+                {/* Lista em cartões (rola; cabeçalho acima fica fixo) */}
+                <div className="space-y-2 max-h-[45vh] overflow-y-auto -mx-1 px-1">
+                  {compraRowsFiltrados.length === 0 ? (
+                    <p className="text-sm text-gray-400 text-center py-6">Nenhum item encontrado.</p>
+                  ) : compraRowsFiltrados.map(v => (
+                    <div key={v.key} className="border border-gray-200 rounded-xl p-3 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-800 truncate">🛒 {v.nome}</p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-semibold text-gray-800">
+                          {metricaCompra === 'valor' ? formatBRL(v.valor) : `${v.qtd}${v.unidade ? ' ' + v.unidade : ''}`}
+                        </p>
+                        <p className="text-xs font-mono text-gray-400">
+                          {metricaCompra === 'valor' ? `${v.qtd}${v.unidade ? ' ' + v.unidade : ''} comprados` : formatBRL(v.valor)}
                         </p>
                       </div>
                     </div>
