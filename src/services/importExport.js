@@ -301,7 +301,8 @@ export async function exportarVendasXLSX(rows, { ini, fim }) {
 }
 
 // Exporta as compras (entradas) de um período como Excel, no mesmo estilo:
-// aba "Compras" (detalhe por produto) + "Resumo" (por categoria).
+// aba "Resumo" (por categoria) + "Compras" (detalhe geral) + uma aba por
+// categoria (como no Estoque Excel).
 // `rows` = [{ nome, categoria, unidade, qtd, valor }] (valor = custo × qtd).
 export async function exportarComprasXLSX(rows, { ini, fim }) {
   const mod = await import('exceljs')
@@ -312,71 +313,89 @@ export async function exportarComprasXLSX(rows, { ini, fim }) {
   const dataStr = new Date().toLocaleDateString('pt-BR')
   const periodoStr = `${dataBR(ini)} a ${dataBR(fim)}`
   const itens = rows.slice().sort((a, b) => b.valor - a.valor)
+  const totQtd = r3(itens.reduce((s, x) => s + x.qtd, 0))
+  const totCusto = r2(itens.reduce((s, x) => s + x.valor, 0))
+
+  // Agrupa por categoria (ordem canônica com itens; extras por último).
+  const porCat = {}
+  for (const it of itens) (porCat[it.categoria || 'Outros'] || (porCat[it.categoria || 'Outros'] = [])).push(it)
+  const extras = Object.keys(porCat).filter(c => !CATEGORIAS_ORDEM.includes(c)).sort((a, b) => a.localeCompare(b))
+  const ordemCat = [...CATEGORIAS_ORDEM.filter(c => porCat[c]), ...extras]
 
   const wsR = wb.addWorksheet('Resumo', { views: [{ state: 'frozen', ySplit: 4 }] })
 
-  // Aba Compras (detalhe).
-  const headers = ['Produto', 'Categoria', 'Qtd comprada', 'Und', 'Custo un. (R$)', 'Custo total (R$)']
-  const larguras = [34, 22, 14, 10, 15, 16]
-  const nc = headers.length
-  const ws = wb.addWorksheet('Compras', { views: [{ state: 'frozen', ySplit: 4 }] })
-  ws.columns = larguras.map(w => ({ width: w }))
-  ws.mergeCells(1, 1, 1, nc)
-  ws.getCell('A1').value = `Pier Pizza & Cantina — Compras — ${periodoStr}`
-  ws.getCell('A1').font = { bold: true, size: 14, color: { argb: C_VINHO } }
-  ws.getRow(1).height = 22
-  ws.mergeCells(2, 1, 2, nc)
-  ws.getCell('A2').value = `Gerado em ${dataStr} · R$ = custo (custo atual × qtd, não é o valor da nota)`
-  ws.getCell('A2').font = { size: 9, italic: true, color: { argb: C_CINZA } }
-  const hr = ws.getRow(4)
-  headers.forEach((h, i) => {
-    const c = hr.getCell(i + 1)
-    c.value = h
-    c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
-    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO } }
-    c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'center' }
-    c.border = bordaFina()
-  })
-  hr.height = 20
-  let totCusto = 0, totQtd = 0
-  itens.forEach((it, idx) => {
-    const custoUn = it.qtd ? it.valor / it.qtd : 0
-    totCusto += it.valor
-    totQtd += it.qtd
-    const vals = [it.nome, it.categoria || 'Outros', it.qtd, it.unidade || '', r2(custoUn), r2(it.valor)]
-    const r = ws.getRow(5 + idx)
-    vals.forEach((v, ci) => {
-      const c = r.getCell(ci + 1)
-      c.value = v
+  // Monta uma aba de detalhe de compras (com ou sem a coluna Categoria).
+  const construirDetalhe = (aba, titulo, lista, comCategoria) => {
+    const headers = comCategoria
+      ? ['Produto', 'Categoria', 'Qtd comprada', 'Und', 'Custo un. (R$)', 'Custo total (R$)']
+      : ['Produto', 'Qtd comprada', 'Und', 'Custo un. (R$)', 'Custo total (R$)']
+    const larguras = comCategoria ? [34, 22, 14, 10, 15, 16] : [34, 14, 10, 15, 16]
+    const nc = headers.length
+    const colCusto = comCategoria ? 5 : 4
+    const ws = wb.addWorksheet(nomeAba(aba), { views: [{ state: 'frozen', ySplit: 4 }] })
+    ws.columns = larguras.map(w => ({ width: w }))
+    ws.mergeCells(1, 1, 1, nc)
+    ws.getCell('A1').value = titulo
+    ws.getCell('A1').font = { bold: true, size: 14, color: { argb: C_VINHO } }
+    ws.getRow(1).height = 22
+    ws.mergeCells(2, 1, 2, nc)
+    ws.getCell('A2').value = `Gerado em ${dataStr} · R$ = custo (custo atual × qtd, não é o valor da nota)`
+    ws.getCell('A2').font = { size: 9, italic: true, color: { argb: C_CINZA } }
+    const hr = ws.getRow(4)
+    headers.forEach((h, i) => {
+      const c = hr.getCell(i + 1)
+      c.value = h
+      c.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO } }
+      c.alignment = { vertical: 'middle', horizontal: i === 0 ? 'left' : 'center' }
       c.border = bordaFina()
-      c.alignment = { horizontal: ci === 0 || ci === 1 ? 'left' : 'center' }
-      if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_ZEBRA } }
     })
-    r.getCell(5).numFmt = FMT_RS
-    r.getCell(6).numFmt = FMT_RS
-  })
-  const sr = ws.getRow(5 + itens.length)
-  sr.getCell(1).value = `TOTAL — ${itens.length} item(ns) · ${r3(totQtd)} comprados`
-  sr.getCell(nc).value = r2(totCusto)
-  sr.getCell(nc).numFmt = FMT_RS
-  for (let ci = 1; ci <= nc; ci++) {
-    sr.getCell(ci).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO_CLARO } }
-    sr.getCell(ci).border = bordaFina()
-    sr.getCell(ci).font = { bold: true }
+    hr.height = 20
+    let tc = 0, tq = 0
+    lista.forEach((it, idx) => {
+      const custoUn = it.qtd ? it.valor / it.qtd : 0
+      tc += it.valor
+      tq += it.qtd
+      const vals = comCategoria
+        ? [it.nome, it.categoria || 'Outros', it.qtd, it.unidade || '', r2(custoUn), r2(it.valor)]
+        : [it.nome, it.qtd, it.unidade || '', r2(custoUn), r2(it.valor)]
+      const r = ws.getRow(5 + idx)
+      vals.forEach((v, ci) => {
+        const c = r.getCell(ci + 1)
+        c.value = v
+        c.border = bordaFina()
+        c.alignment = { horizontal: (ci === 0 || (comCategoria && ci === 1)) ? 'left' : 'center' }
+        if (idx % 2 === 1) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_ZEBRA } }
+      })
+      r.getCell(colCusto).numFmt = FMT_RS
+      r.getCell(colCusto + 1).numFmt = FMT_RS
+    })
+    const sr = ws.getRow(5 + lista.length)
+    sr.getCell(1).value = `TOTAL — ${lista.length} item(ns) · ${r3(tq)} comprados`
+    sr.getCell(nc).value = r2(tc)
+    sr.getCell(nc).numFmt = FMT_RS
+    for (let ci = 1; ci <= nc; ci++) {
+      sr.getCell(ci).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: C_VINHO_CLARO } }
+      sr.getCell(ci).border = bordaFina()
+      sr.getCell(ci).font = { bold: true }
+    }
+    sr.getCell(1).alignment = { horizontal: 'left' }
+    sr.getCell(nc).alignment = { horizontal: 'center' }
   }
-  sr.getCell(1).alignment = { horizontal: 'left' }
-  sr.getCell(nc).alignment = { horizontal: 'center' }
+
+  // Aba "Compras" (todas) + uma aba por categoria.
+  construirDetalhe('Compras', `Pier Pizza & Cantina — Compras — ${periodoStr}`, itens, true)
+  for (const cat of ordemCat) {
+    construirDetalhe(cat, `Pier Pizza & Cantina — Compras — ${cat} — ${periodoStr}`, porCat[cat], false)
+  }
 
   // Aba Resumo (por categoria).
-  const porCat = {}
-  for (const it of itens) {
-    const c = it.categoria || 'Outros'
-    if (!porCat[c]) porCat[c] = { n: 0, qtd: 0, custo: 0 }
-    porCat[c].n += 1
-    porCat[c].qtd += it.qtd
-    porCat[c].custo += it.valor
-  }
-  const catRows = Object.entries(porCat).map(([cat, t]) => ({ cat, ...t })).sort((a, b) => b.custo - a.custo)
+  const catRows = ordemCat.map(cat => ({
+    cat,
+    n: porCat[cat].length,
+    qtd: r3(porCat[cat].reduce((s, x) => s + x.qtd, 0)),
+    custo: r2(porCat[cat].reduce((s, x) => s + x.valor, 0)),
+  }))
   wsR.columns = [{ width: 28 }, { width: 14 }, { width: 16 }, { width: 18 }]
   wsR.mergeCells('A1:D1')
   wsR.getCell('A1').value = `Pier Pizza & Cantina — Compras — ${periodoStr}`
