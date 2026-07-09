@@ -250,6 +250,16 @@ export function ImportarFoto() {
   }
   const aplicarSinonimo = nome => SINONIMOS[semAcento(nome)] || nome
 
+  // Peso/volume por unidade: itens da planilha que vêm por UNIDADE mas o produto
+  // é por peso (kg/l). Chave = nome canônico (após aliases), semAcento. O fator
+  // de conversão (g→kg, ml→l) é resolvido em construirItem pela unidade do produto.
+  const PESO_UNIDADE = {
+    'limao thaiti': { peso: 100, unidade: 'g' },
+    'chopp brahma claro barril 50l': { peso: 0.3, unidade: 'l' },
+    'vinho do porto messias': { peso: 700, unidade: 'ml' },
+    'campari': { peso: 900, unidade: 'ml' },
+  }
+
   // Normaliza variantes de bebida: "sem açúcar"=zero; tira ruído (refrigerante,
   // antarctica, açúcar); "2 litros"/"2 l" -> "2l". Aplicado nos dois lados.
   function normVenda(nome) {
@@ -334,7 +344,13 @@ export function ImportarFoto() {
 
   function construirItemVenda(raw) {
     const nomeSin = aplicarSinonimo(raw.nome) // equivalências explícitas (fritas, ceasar...)
-    const base = construirItem({ nome: nomeSin, quantidade: raw.quantidade }, {})
+    // Injeta peso/volume por unidade quando o item precisa (limão, chopp, vinhos).
+    const pesoInfo = PESO_UNIDADE[semAcento(nomeSin)]
+    const base = construirItem({
+      nome: nomeSin,
+      quantidade: raw.quantidade,
+      ...(pesoInfo ? { pesoEmbalagem: pesoInfo.peso, unidadeEmbalagem: pesoInfo.unidade } : {}),
+    }, {})
     // Mostra o tamanho na revisão (ex: "Argentina (G)") sem duplicar se o nome
     // já tinha "(P)"/"(G)".
     if (raw.tamanho) base.nome = `${raw.nome.replace(/\s*\([gp]\)\s*$/i, '').trim()} (${raw.tamanho})`
