@@ -28,7 +28,7 @@ const ALIASES = [
   [/nutella/gi, 'Ciocolatto e Morango'],
   [/\b5\s*queijos/gi, 'Cinco Queijos'],
   // Vínculos nome do PDV → ficha/produto (jul/2026). Cobrem variantes/prefixos.
-  [/cannoli\s+de\s+cioccolatto.*/i, 'Cannoli De Nuttela'],
+  [/cannoli\s+de\s+cioccolatto.*/i, 'Cannoli de Nutella'],
   [/cannoli\s+italiano.*/i, 'Cannoli'],
   [/(refrigerante\s+)?soda\s+antar\S*\s+lata\s+350\s*ml/i, 'Sprite Lata 350ML'],
   [/jarra\s+suco\s+laranja/i, 'Jarra De Suco De Laranja'],
