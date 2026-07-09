@@ -27,8 +27,37 @@ const ALIASES = [
   [/mini\s*pizzas?/gi, 'Pierzitta'],
   [/nutella/gi, 'Ciocolatto e Morango'],
   [/\b5\s*queijos/gi, 'Cinco Queijos'],
+  // Vínculos nome do PDV → ficha/produto (jul/2026). Cobrem variantes/prefixos.
+  [/cannoli\s+de\s+cioccolatto.*/i, 'Cannoli de Nutella'],
+  [/cannoli\s+italiano.*/i, 'Cannoli'],
+  [/(refrigerante\s+)?soda\s+antar\S*\s+lata\s+350\s*ml/i, 'Sprite Lata 350ML'],
+  [/jarra\s+suco\s+laranja/i, 'Jarra De Suco De Laranja'],
+  [/suco\s+(natural\s+de\s+laranja|de\s+laranja\s+natural)/i, 'Suco Natural De Laranja'],
+  [/batata\s+palha.*/i, 'Adicional De Batata Palha'],
+  [/medalh[ãa]o\s+de\s+fil[eé]\s+mignon.*/i, 'Adicional De Medalhão De Filet Mignon'],
+  [/santa\s+carolina\s+375\s*ml/i, 'Vinho Tinto Santa Carolina 375ml'],
+  [/semifreddo\s+de\s+maracuj[áa]/i, "Passione D'oro"],
+  [/(talharim\s+ao\s+molho\s+alfredo\s+com\s+mignon|fil[eé]\s+mignon\s+com\s+talharim\s+ao\s+molho\s+alfredo).*/i, 'Filleto Com Talharim Ao Molho Alfredo'],
+  [/gnocchi\s+com\s+tagliata\s+di\s+mignon.*/i, 'Gnocchi Com Mignon / Gnocchi Com Tagliata De Manzo'],
+  [/santa\s+helena\s+375\s*ml/i, 'Vinho Santa Helena Cabernet 375ML'],
+  [/trident.*/i, 'Trident Menta Envelope'],
+  [/(contra\s*fil[eé]\s+blu\s+melt|contrafil[eé]\s+speciale).*/i, 'Contrafilé Speciale'],
+  [/picanha\s+brasiliana/i, 'Picanha Brasileira'],
+  [/parmegiana\s+de\s+fil[eé]\s+mignon\s*-\s*prato.*/i, 'Parmegiana de Filet Mignon'],
+  [/^\s*esperanto\s*$/i, 'Vinho Esperanto 750ML'],
+  [/^\s*cosecha\s+tarapac[áa]\s*$/i, 'Vinho Chileno Cosecha Tarapaca Chardonnay Garrafa 750ml'],
+  [/polpettone\s+com\s+talharim.*/i, 'Polpettone com Talharim'],
+  [/spaghetti\/?\s*talharim\s+ao\s+sugo.*/i, 'Spaghetti ao Sugo'],
+  [/caipirinha\s+lim[ãa]o/i, 'Caipirinha de Cachaça'],
+  [/lim[ãa]o\s+espremido/i, 'Limão Thaiti'],
+  [/chopp.*/i, 'Chopp Brahma Claro Barril 50L'],
+  [/vinho\s+tinto\s+do\s+porto/i, 'Vinho do Porto Messias'],
 ]
 const aplicarAliases = nome => ALIASES.reduce((s, [re, sub]) => s.replace(re, sub), String(nome || ''))
+
+// Pais genéricos a IGNORAR (vão pro painel de ignorados; os FILHOS continuam
+// sendo baixados). Comparado por semAcento do nome do pai.
+const IGNORAR = new Set(['refrigerante lata', 'refrigerante 2 litros', 'combo resenha no pier'])
 
 // Tamanho de um nome de PIZZA: 'G' (grande) | 'P' (pequena) | null (não-pizza).
 function tamanhoDoNome(nome) {
@@ -125,8 +154,9 @@ export function parseVendasRows(rows) {
   const ignorados = []
   const ehBorda = n => /borda/i.test(n)
   const ehBebida = n => /refriger|coca|guaran|schweppes|\bsoda\b|sprite|fanta|cerveja|chopp|heineken|stella|brahma|antarctica|\bagua\b|\bsuco\b|tonica|\blata\b|\b350\b|\b600\b|\b2\s*l\b|\blitro|jarra|limonada|caipir|\bgin\b|drink|original\s*\d/i.test(n)
-  // "Adicional" = não é conteúdo principal (borda ou bebida). NÃO descarta o pai.
-  const ehAdicional = n => ehBorda(n) || ehBebida(n)
+  // "Adicional" = não é conteúdo principal (borda, bebida ou item marcado como
+  // "Adicional ..."). NÃO descarta o pai e NÃO recebe tamanho de pizza.
+  const ehAdicional = n => ehBorda(n) || ehBebida(n) || /^adicional/i.test(n)
 
   const emitir = (nome, quantidade, tamanho) => {
     const tam = tamanho ?? tamanhoDoNome(nome)
@@ -145,6 +175,14 @@ export function parseVendasRows(rows) {
 
   // 2) Decide pai a pai — pelo TIPO dos filhos, NÃO pelo total do pai (descartado).
   for (const b of blocos) {
+    // Pai genérico a ignorar (ex: "Refrigerante Lata"): não emite o pai (vai pros
+    // ignorados), mas mantém os filhos (os sabores reais) sendo baixados.
+    if (IGNORAR.has(semAcento(b.nome))) {
+      ignorados.push({ nome: b.nome, quantidade: b.q })
+      for (const f of b.filhos) emitir(f.nome, f.q, tamanhoFilho(b.nome, f.nome))
+      continue
+    }
+
     const temConteudo = b.filhos.some(f => !ehAdicional(f.nome)) // filho que NÃO é borda/bebida
 
     if (b.filhos.length && temConteudo) {
